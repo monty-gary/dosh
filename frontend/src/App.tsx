@@ -439,6 +439,14 @@ function App() {
   };
 
   const onSettled = () => {
+    if (!settlements.length) {
+      return;
+    }
+
+    if (!window.confirm(`Add ${settlements.length} payment${settlements.length === 1 ? '' : 's'} from Settle Up?`)) {
+      return;
+    }
+
     setErrorMessage(null);
     for (const transfer of settlements) {
       addPaymentExpense(transfer.fromName, transfer.toName, transfer.amountCents);
@@ -542,7 +550,7 @@ function App() {
           <header className="topbar">
             <div>
               <h1>Tab Admin</h1>
-              <p>Create and delete tabs (name + password).</p>
+              <p>Create and delete tabs.</p>
             </div>
             <div className="topbar-right">
               <button className="ghost" onClick={() => {
@@ -617,7 +625,7 @@ function App() {
                 setPasswordInput('');
               }}
             >
-              Lock
+              Leave
             </button>
           </div>
         </header>
@@ -680,22 +688,23 @@ function App() {
             {regularExpenses.length || paymentExpenses.length ? (
               <ul className="expense-list">
                 {[...regularExpenses].reverse().map((expense) => (
-                  <li key={expense.id}>
-                    <div>
-                      <strong>{expense.description}</strong>
-                      <p>
-                        {expense.paidByName} paid {formatMoney(expense.amountCents, tabCurrency)}
-                      </p>
-                    </div>
-                    <div className="expense-right">
-                      <div className="split-readout">
-                        {expense.splits.map((split) => (
-                          <span key={`${expense.id}-${split.participantName}`}>
-                            {split.participantName} × {split.weight}
-                          </span>
-                        ))}
+                  <li key={expense.id} className="expense-item">
+                    <strong className="expense-title">{expense.description}</strong>
+                    <div className="expense-body">
+                      <div className="expense-meta">
+                        <span>{expense.paidByName} paid</span>
+                        <span className="expense-amount">{formatMoney(expense.amountCents, tabCurrency)}</span>
                       </div>
-                      <button type="button" className="danger-icon" onClick={() => onRemoveExpense(expense.id)}>−</button>
+                      <div className="expense-right">
+                        <div className="split-readout">
+                          {expense.splits.map((split) => (
+                            <span key={`${expense.id}-${split.participantName}`}>
+                              {split.participantName} × {split.weight}
+                            </span>
+                          ))}
+                        </div>
+                        <button type="button" className="danger-icon" onClick={() => onRemoveExpense(expense.id)}>−</button>
+                      </div>
                     </div>
                   </li>
                 ))}

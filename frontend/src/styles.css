@@ -335,17 +335,44 @@ strong.pos {
   grid-column: span 2;
 }
 
+
 .expense-list li {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.expense-item {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.expense-title {
+  display: block;
+  width: 100%;
+}
+
+.expense-body {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 0.65rem;
-  align-items: start;
+  align-items: end;
+}
+
+.expense-meta {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.expense-amount {
+  font-family: 'Space Mono', monospace;
+  color: #ffdf93;
 }
 
 .expense-right {
   display: grid;
   gap: 0.4rem;
   justify-items: end;
+  align-items: end;
 }
 
 .split-readout {
@@ -361,6 +388,11 @@ strong.pos {
   padding: 0.25rem 0.52rem;
   font-size: 0.84rem;
   color: #ffe6c4;
+}
+
+.payment-item {
+  border-color: rgba(255, 170, 120, 0.45);
+  background: rgba(72, 33, 15, 0.76);
 }
 
 .danger-icon {
