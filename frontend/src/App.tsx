@@ -194,6 +194,7 @@ function App() {
     };
   }, [authPhase, authToken, clientId, isAdmin, sendWsMessage]);
 
+  const isOffline = connectionState !== 'online';
   const people = snapshot?.people || [];
   const settlements = snapshot?.settlements || [];
   const expenses = snapshot?.expenses || [];
@@ -639,12 +640,12 @@ function App() {
         <div className="main-grid">
           <section className="panel action-panel">
             <div className="action-buttons">
-              <button type="button" onClick={() => setShowExpenseModal(true)}>Add Expense</button>
-              <button type="button" onClick={() => setShowPersonModal(true)}>Add Person</button>
+              <button type="button" disabled={isOffline} onClick={() => setShowExpenseModal(true)}>Add Expense</button>
+              <button type="button" disabled={isOffline} onClick={() => setShowPersonModal(true)}>Add Person</button>
             </div>
             <div className="action-buttons">
-              <button type="button" onClick={() => setShowPaymentModal(true)}>Add Payment</button>
-              <button type="button" onClick={onSettled} disabled={!settlements.length}>Settled!</button>
+              <button type="button" disabled={isOffline} onClick={() => setShowPaymentModal(true)}>Add Payment</button>
+              <button type="button" disabled={isOffline || !settlements.length} onClick={onSettled}>Settled!</button>
             </div>
           </section>
 
@@ -692,7 +693,7 @@ function App() {
                   <li key={expense.id} className="expense-item">
                     <div className="expense-header">
                       <strong className="expense-title">{expense.description}</strong>
-                      <button type="button" className="danger-icon" onClick={() => onRemoveExpense(expense.id)}>−</button>
+                      <button type="button" className="danger-icon" disabled={isOffline} onClick={() => onRemoveExpense(expense.id)}>−</button>
                     </div>
                     <div className="expense-meta">
                       <span>{expense.paidByName} paid</span>
@@ -714,7 +715,7 @@ function App() {
                     <li key={payment.id} className="payment-item">
                       <div className="expense-header">
                         <strong>{paymentLabel ? `Payment (${paymentLabel})` : 'Payment'}</strong>
-                        <button type="button" className="danger-icon" onClick={() => onRemoveExpense(payment.id)}>−</button>
+                        <button type="button" className="danger-icon" disabled={isOffline} onClick={() => onRemoveExpense(payment.id)}>−</button>
                       </div>
                       <p>{payment.paidByName} paid {payee} {formatMoney(payment.amountCents, tabCurrency)}</p>
                     </li>
@@ -733,7 +734,7 @@ function App() {
                 {people.map((name) => (
                   <li key={name}>
                     <span>{name}</span>
-                    <button type="button" className="danger-icon" onClick={() => onRemovePerson(name)}>−</button>
+                    <button type="button" className="danger-icon" disabled={isOffline} onClick={() => onRemovePerson(name)}>−</button>
                   </li>
                 ))}
               </ul>
@@ -828,7 +829,7 @@ function App() {
               </div>
 
               <div className="inline-grid">
-                <button type="submit" disabled={people.length === 0}>Save</button>
+                <button type="submit" disabled={isOffline || people.length === 0}>Save</button>
                 <button type="button" className="ghost" onClick={() => setShowExpenseModal(false)}>Cancel</button>
               </div>
             </form>
@@ -855,6 +856,7 @@ function App() {
                           <strong>{formatMoney(transfer.amountCents, tabCurrency)}</strong>
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() => onAddSuggestedPayment(transfer.fromName, transfer.toName, transfer.amountCents)}
                           >
                             Add
@@ -911,7 +913,7 @@ function App() {
                 </div>
 
                 <div className="inline-grid">
-                  <button type="submit" disabled={people.length < 2}>Add custom payment</button>
+                  <button type="submit" disabled={isOffline || people.length < 2}>Add custom payment</button>
                   <button type="button" className="ghost" onClick={() => setShowPaymentModal(false)}>Close</button>
                 </div>
               </form>
@@ -936,7 +938,7 @@ function App() {
                 />
               </div>
               <div className="inline-grid">
-                <button type="submit">Save</button>
+                <button type="submit" disabled={isOffline}>Save</button>
                 <button type="button" className="ghost" onClick={() => setShowPersonModal(false)}>Cancel</button>
               </div>
             </form>

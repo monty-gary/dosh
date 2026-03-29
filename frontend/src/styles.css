@@ -152,6 +152,12 @@ button.ghost {
   color: #f7cfa2;
 }
 
+button:disabled {
+  opacity: 0.38;
+  filter: grayscale(0.45);
+  cursor: not-allowed;
+}
+
 .error-text {
   color: var(--error);
   font-weight: 600;
