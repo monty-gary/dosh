@@ -32,6 +32,9 @@ function App() {
   const [paidByName, setPaidByName] = useState('');
   const [splitRows, setSplitRows] = useState<SplitRow[]>([{ participantName: '', weight: '1' }]);
   const [newPersonInput, setNewPersonInput] = useState('');
+  const [paymentAmountInput, setPaymentAmountInput] = useState('');
+  const [paymentFromName, setPaymentFromName] = useState('');
+  const [paymentToName, setPaymentToName] = useState('');
 
   const [adminTabs, setAdminTabs] = useState<AdminTab[]>([]);
   const [newTabName, setNewTabName] = useState('');
@@ -42,6 +45,7 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showPersonModal, setShowPersonModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -191,11 +195,25 @@ function App() {
   }, [authPhase, authToken, clientId, isAdmin, sendWsMessage]);
 
   const people = snapshot?.people || [];
+  const settlements = snapshot?.settlements || [];
+  const expenses = snapshot?.expenses || [];
+
+  const paymentExpenses = useMemo(
+    () => expenses.filter((expense) => expense.description.startsWith('PAY:')),
+    [expenses]
+  );
+
+  const regularExpenses = useMemo(
+    () => expenses.filter((expense) => !expense.description.startsWith('PAY:')),
+    [expenses]
+  );
 
   useEffect(() => {
     if (!people.length) {
       setPaidByName('');
       setSplitRows([{ participantName: '', weight: '1' }]);
+      setPaymentFromName('');
+      setPaymentToName('');
       return;
     }
 
@@ -217,6 +235,14 @@ function App() {
           participantName: valid
         };
       });
+    });
+
+    setPaymentFromName((current) => (current && people.includes(current) ? current : people[0]));
+    setPaymentToName((current) => {
+      if (current && people.includes(current)) {
+        return current;
+      }
+      return people.length > 1 ? people[1] : people[0];
     });
   }, [people]);
 
@@ -366,6 +392,57 @@ function App() {
     setAmountInput('');
     setSplitRows([{ participantName: people[0] || '', weight: '1' }]);
     setShowExpenseModal(false);
+  };
+
+  const addPaymentExpense = (fromName: string, toName: string, amountCents: number) => {
+    if (!fromName || !toName || fromName === toName || amountCents <= 0) {
+      return;
+    }
+
+    const description = `PAY:${fromName}->${toName}`;
+    sendWsMessage({
+      type: 'add_expense',
+      description,
+      amount: amountCents / 100,
+      paidByName: fromName,
+      splits: [{ participantName: toName, weight: 1 }]
+    });
+  };
+
+  const onAddSuggestedPayment = (fromName: string, toName: string, amountCents: number) => {
+    setErrorMessage(null);
+    addPaymentExpense(fromName, toName, amountCents);
+  };
+
+  const onAddCustomPayment = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setErrorMessage(null);
+
+    const amount = Number(paymentAmountInput);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setErrorMessage('Payment amount must be positive.');
+      return;
+    }
+
+    if (!people.includes(paymentFromName) || !people.includes(paymentToName)) {
+      setErrorMessage('Payment from/to must be selected from people list.');
+      return;
+    }
+
+    if (paymentFromName === paymentToName) {
+      setErrorMessage('Payment must be between two different people.');
+      return;
+    }
+
+    addPaymentExpense(paymentFromName, paymentToName, Math.round(amount * 100));
+    setPaymentAmountInput('');
+  };
+
+  const onSettled = () => {
+    setErrorMessage(null);
+    for (const transfer of settlements) {
+      addPaymentExpense(transfer.fromName, transfer.toName, transfer.amountCents);
+    }
   };
 
   const onCreateTab = async (event: FormEvent<HTMLFormElement>) => {
@@ -556,13 +633,17 @@ function App() {
               <button type="button" onClick={() => setShowExpenseModal(true)}>Add Expense</button>
               <button type="button" onClick={() => setShowPersonModal(true)}>Add Person</button>
             </div>
+            <div className="action-buttons">
+              <button type="button" onClick={() => setShowPaymentModal(true)}>Add Payment</button>
+              <button type="button" onClick={onSettled} disabled={!settlements.length}>Settled!</button>
+            </div>
           </section>
 
           <section className="panel">
-            <h2>Who pays whom</h2>
-            {snapshot?.settlements.length ? (
+            <h2>Settle Up</h2>
+            {settlements.length ? (
               <ul className="settlement-list">
-                {snapshot.settlements.map((transfer, index) => (
+                {settlements.map((transfer, index) => (
                   <li key={`${transfer.fromName}-${transfer.toName}-${index}`}>
                     <span>
                       <b>{transfer.fromName}</b> pays <b>{transfer.toName}</b>
@@ -596,9 +677,9 @@ function App() {
 
           <section className="panel">
             <h2>Expenses</h2>
-            {snapshot?.expenses.length ? (
+            {regularExpenses.length || paymentExpenses.length ? (
               <ul className="expense-list">
-                {[...snapshot.expenses].reverse().map((expense) => (
+                {[...regularExpenses].reverse().map((expense) => (
                   <li key={expense.id}>
                     <div>
                       <strong>{expense.description}</strong>
@@ -610,7 +691,7 @@ function App() {
                       <div className="split-readout">
                         {expense.splits.map((split) => (
                           <span key={`${expense.id}-${split.participantName}`}>
-                            {split.participantName}: {formatMoney(split.shareCents, tabCurrency)} ({split.weight})
+                            {split.participantName} × {split.weight}
                           </span>
                         ))}
                       </div>
@@ -618,6 +699,20 @@ function App() {
                     </div>
                   </li>
                 ))}
+                {[...paymentExpenses].reverse().map((payment) => {
+                  const payee = payment.splits[0]?.participantName || 'Unknown';
+                  return (
+                    <li key={payment.id} className="payment-item">
+                      <div>
+                        <strong>Payment</strong>
+                        <p>{payment.paidByName} paid {payee} {formatMoney(payment.amountCents, tabCurrency)}</p>
+                      </div>
+                      <div className="expense-right">
+                        <button type="button" className="danger-icon" onClick={() => onRemoveExpense(payment.id)}>−</button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <p className="hint">No expenses yet.</p>
@@ -730,6 +825,90 @@ function App() {
                 <button type="button" className="ghost" onClick={() => setShowExpenseModal(false)}>Cancel</button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {showPaymentModal ? (
+        <div className="modal-backdrop" onClick={() => setShowPaymentModal(false)}>
+          <div className="modal card" onClick={(event) => event.stopPropagation()}>
+            <h2>Add Payment</h2>
+
+            <div className="form-stack">
+              <div>
+                <label>From Settle Up</label>
+                {settlements.length ? (
+                  <ul className="settlement-list">
+                    {settlements.map((transfer, index) => (
+                      <li key={`${transfer.fromName}-${transfer.toName}-${index}`}>
+                        <span>
+                          <b>{transfer.fromName}</b> → <b>{transfer.toName}</b>
+                        </span>
+                        <div className="topbar-right">
+                          <strong>{formatMoney(transfer.amountCents, tabCurrency)}</strong>
+                          <button
+                            type="button"
+                            onClick={() => onAddSuggestedPayment(transfer.fromName, transfer.toName, transfer.amountCents)}
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="hint">No suggested payments.</p>
+                )}
+              </div>
+
+              <form className="form-stack" onSubmit={onAddCustomPayment}>
+                <label>Custom payment</label>
+                <div className="inline-grid">
+                  <div>
+                    <label htmlFor="paymentAmount">Amount</label>
+                    <input
+                      id="paymentAmount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      value={paymentAmountInput}
+                      onChange={(event) => setPaymentAmountInput(event.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="paymentFrom">From</label>
+                    <select
+                      id="paymentFrom"
+                      value={paymentFromName}
+                      onChange={(event) => setPaymentFromName(event.target.value)}
+                    >
+                      {people.map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="paymentTo">To</label>
+                  <select
+                    id="paymentTo"
+                    value={paymentToName}
+                    onChange={(event) => setPaymentToName(event.target.value)}
+                  >
+                    {people.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="inline-grid">
+                  <button type="submit" disabled={people.length < 2}>Add custom payment</button>
+                  <button type="button" className="ghost" onClick={() => setShowPaymentModal(false)}>Close</button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       ) : null}

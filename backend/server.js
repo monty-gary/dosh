@@ -694,6 +694,16 @@ function validateExpenseInput(message, tab) {
     return { ok: false, error: 'at least one split participant is required' };
   }
 
+  if (description.startsWith('PAY:')) {
+    if (splits.length !== 1) {
+      return { ok: false, error: 'payment must target exactly one person' };
+    }
+
+    if (splits[0].participantName === paidByName) {
+      return { ok: false, error: 'payment must be between two different people' };
+    }
+  }
+
   return {
     ok: true,
     description,
