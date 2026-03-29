@@ -178,6 +178,12 @@ button.ghost {
   gap: 0.6rem;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .status-pill {
   border-radius: 999px;
   padding: 0.3rem 0.6rem;

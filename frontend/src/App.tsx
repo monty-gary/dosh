@@ -609,14 +609,16 @@ function App() {
       <section className="app-frame">
         <header className="topbar">
           <div>
-            <h1>dosh</h1>
+            <div className="title-row">
+              <h1>dosh</h1>
+              <div className="status-pill">
+                <span>{connectionState === 'online' ? 'Live' : 'Offline'}</span>
+              </div>
+            </div>
             <p>{tabName || 'Tab'}</p>
           </div>
 
           <div className="topbar-right">
-            <div className="status-pill">
-              <span>{connectionState === 'online' ? 'Live' : 'Offline'}</span>
-            </div>
             <button
               className="ghost"
               onClick={() => {
