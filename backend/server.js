@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
+import { Pool } from 'pg';
 import { WebSocketServer } from 'ws';
 
 const DEFAULT_PASSWORD = 'money';
@@ -13,12 +14,14 @@ const port = Number(process.env.PORT || DEFAULT_PORT);
 const universalPassword = process.env.DOSH_PASSWORD || DEFAULT_PASSWORD;
 const corsOrigin = process.env.CORS_ORIGIN || '*';
 const TOKEN_SECRET = process.env.DOSH_TOKEN_SECRET || 'dosh-demo-token-secret';
+const DATABASE_URL = process.env.DATABASE_URL || '';
 const rawTokenTtlMs = Number(process.env.DOSH_TOKEN_TTL_MS ?? '0');
 const TOKEN_TTL_MS = Number.isFinite(rawTokenTtlMs) && rawTokenTtlMs > 0 ? rawTokenTtlMs : 0;
 
 const tabs = new Map();
 const clients = new Map(); // key: `${tabId}:${clientId}`
 const socketByClientKey = new Map(); // key: `${tabId}:${clientId}`
+let dbPool = null;
 
 tabs.set(DEFAULT_TAB_ID, createTabRecord(DEFAULT_TAB_ID, 'Default tab', universalPassword));
 
@@ -210,6 +213,7 @@ const server = http.createServer(async (req, res) => {
     const tabId = `tab-${randomUUID().slice(0, 8)}`;
     const tab = createTabRecord(tabId, name, password);
     tabs.set(tab.id, tab);
+    await persistState();
 
     writeJson(res, 201, { ok: true, tab: { id: tab.id, name: tab.name } });
     return;
@@ -229,13 +233,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (tabId === DEFAULT_TAB_ID) {
-      writeJson(res, 400, { ok: false, error: 'default tab cannot be deleted' });
-      return;
-    }
-
     tabs.delete(tabId);
     cleanupTabConnections(tabId);
+    await persistState();
 
     writeJson(res, 200, { ok: true });
     return;
@@ -300,12 +300,14 @@ wss.on('connection', (ws, session) => {
   sendState(ws, session.tabId, session.clientId);
   broadcastState(session.tabId);
 
-  ws.on('message', (raw) => {
+  ws.on('message', async (raw) => {
     const message = parseWsMessage(raw);
     if (!message || typeof message.type !== 'string') {
       sendError(ws, 'invalid message format');
       return;
     }
+
+    try {
 
     if (message.type === 'set_username') {
       if (typeof message.username !== 'string') {
@@ -334,6 +336,7 @@ wss.on('connection', (ws, session) => {
 
       tab.people.add(name);
       client.lastSeenAtMs = Date.now();
+      await persistState();
       broadcastState(session.tabId);
       return;
     }
@@ -347,6 +350,7 @@ wss.on('connection', (ws, session) => {
 
       tab.people.delete(name);
       client.lastSeenAtMs = Date.now();
+      await persistState();
       broadcastState(session.tabId);
       return;
     }
@@ -369,6 +373,7 @@ wss.on('connection', (ws, session) => {
       });
 
       client.lastSeenAtMs = Date.now();
+      await persistState();
       broadcastState(session.tabId);
       return;
     }
@@ -388,6 +393,7 @@ wss.on('connection', (ws, session) => {
 
       tab.expenses.splice(index, 1);
       client.lastSeenAtMs = Date.now();
+      await persistState();
       broadcastState(session.tabId);
       return;
     }
@@ -401,6 +407,9 @@ wss.on('connection', (ws, session) => {
     }
 
     sendError(ws, 'unsupported message type');
+    } catch (error) {
+      sendError(ws, 'internal error');
+    }
   });
 
   ws.on('close', () => {
@@ -421,6 +430,8 @@ wss.on('connection', (ws, session) => {
     // ignore; close handler updates state
   });
 });
+
+await initStorage();
 
 server.listen(port, () => {
   // eslint-disable-next-line no-console
@@ -476,6 +487,114 @@ function cleanupTabConnections(tabId) {
       clients.delete(clientKey);
     }
   }
+}
+
+async function initStorage() {
+  if (!DATABASE_URL) {
+    return;
+  }
+
+  dbPool = new Pool({
+    connectionString: DATABASE_URL
+  });
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS app_state (
+      id INTEGER PRIMARY KEY,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  const result = await dbPool.query('SELECT data FROM app_state WHERE id = 1');
+  if (result.rows.length > 0) {
+    hydrateState(result.rows[0].data);
+  }
+
+  if (!tabs.has(DEFAULT_TAB_ID)) {
+    tabs.set(DEFAULT_TAB_ID, createTabRecord(DEFAULT_TAB_ID, 'Default tab', universalPassword));
+  }
+
+  await persistState();
+}
+
+function serializeState() {
+  return {
+    tabs: Array.from(tabs.values()).map((tab) => ({
+      id: tab.id,
+      name: tab.name,
+      password: tab.password,
+      people: Array.from(tab.people),
+      expenses: tab.expenses
+    }))
+  };
+}
+
+function hydrateState(data) {
+  if (!data || !Array.isArray(data.tabs)) {
+    return;
+  }
+
+  tabs.clear();
+
+  for (const tab of data.tabs) {
+    if (!tab || typeof tab.id !== 'string' || typeof tab.name !== 'string' || typeof tab.password !== 'string') {
+      continue;
+    }
+
+    const record = createTabRecord(tab.id, tab.name, tab.password);
+
+    if (Array.isArray(tab.people)) {
+      for (const name of tab.people) {
+        const normalized = normalizeName(name);
+        if (normalized) {
+          record.people.add(normalized);
+        }
+      }
+    }
+
+    if (Array.isArray(tab.expenses)) {
+      for (const expense of tab.expenses) {
+        if (!expense || typeof expense.id !== 'string' || !Array.isArray(expense.splits)) {
+          continue;
+        }
+
+        record.expenses.push({
+          id: expense.id,
+          createdAtMs: Number(expense.createdAtMs) || Date.now(),
+          description: String(expense.description || ''),
+          amountCents: Number(expense.amountCents) || 0,
+          paidByName: String(expense.paidByName || ''),
+          splits: expense.splits
+            .map((split) => ({
+              participantName: String(split?.participantName || ''),
+              weight: Number(split?.weight) || 0
+            }))
+            .filter((split) => split.participantName && split.weight > 0),
+          createdByClientId: String(expense.createdByClientId || '')
+        });
+      }
+    }
+
+    tabs.set(record.id, record);
+  }
+}
+
+async function persistState() {
+  if (!dbPool) {
+    return;
+  }
+
+  const data = JSON.stringify(serializeState());
+  await dbPool.query(
+    `
+      INSERT INTO app_state (id, data, updated_at)
+      VALUES (1, $1::jsonb, NOW())
+      ON CONFLICT (id)
+      DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+    `,
+    [data]
+  );
 }
 
 function validateExpenseInput(message, tab) {
