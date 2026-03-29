@@ -10,7 +10,7 @@ export async function authenticate(
   password: string,
   clientId: string
 ): Promise<{ token: string; session: SessionResponse['session'] }> {
-  const response = await fetch(`${API_BASE_URL}/api/auth`, {
+  const response = await safeFetch(`${API_BASE_URL}/api/auth`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -32,7 +32,7 @@ export async function authenticate(
 
 export async function getSession(token: string, clientId: string): Promise<SessionResponse['session']> {
   const params = new URLSearchParams({ token, clientId });
-  const response = await fetch(`${API_BASE_URL}/api/session?${params.toString()}`);
+  const response = await safeFetch(`${API_BASE_URL}/api/session?${params.toString()}`);
   const payload = await response.json();
 
   if (!response.ok || !payload?.ok || !payload?.session) {
@@ -45,13 +45,14 @@ export async function getSession(token: string, clientId: string): Promise<Sessi
 export interface AdminTab {
   id: string;
   name: string;
+  currency: string;
   people: number;
   expenses: number;
 }
 
 export async function listTabs(token: string): Promise<AdminTab[]> {
   const params = new URLSearchParams({ token });
-  const response = await fetch(`${API_BASE_URL}/api/tabs?${params.toString()}`);
+  const response = await safeFetch(`${API_BASE_URL}/api/tabs?${params.toString()}`);
   const payload = await response.json();
 
   if (!response.ok || !payload?.ok || !Array.isArray(payload?.tabs)) {
@@ -61,13 +62,13 @@ export async function listTabs(token: string): Promise<AdminTab[]> {
   return payload.tabs;
 }
 
-export async function createTab(token: string, name: string, password: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/tabs`, {
+export async function createTab(token: string, name: string, password: string, currency: string): Promise<void> {
+  const response = await safeFetch(`${API_BASE_URL}/api/tabs`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ token, name, password })
+    body: JSON.stringify({ token, name, password, currency })
   });
 
   const payload = await response.json();
@@ -78,7 +79,7 @@ export async function createTab(token: string, name: string, password: string): 
 
 export async function deleteTab(token: string, tabId: string): Promise<void> {
   const params = new URLSearchParams({ token });
-  const response = await fetch(`${API_BASE_URL}/api/tabs/${encodeURIComponent(tabId)}?${params.toString()}`, {
+  const response = await safeFetch(`${API_BASE_URL}/api/tabs/${encodeURIComponent(tabId)}?${params.toString()}`, {
     method: 'DELETE'
   });
 
@@ -112,4 +113,12 @@ function toWebSocketUrl(httpUrl: string): string {
   }
 
   return httpUrl;
+}
+
+async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw new Error('Server is starting on Render, please wait ~30-60s and try again.');
+  }
 }

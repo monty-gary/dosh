@@ -33,6 +33,7 @@ export interface SettlementTransfer {
 
 export interface Snapshot {
   serverNowMs: number;
+  currency: string;
   people: string[];
   knownNames: string[];
   expenses: Expense[];
@@ -46,6 +47,7 @@ export interface SessionData extends ClientState {
   isAdmin?: boolean;
   tabId?: string;
   tabName?: string;
+  tabCurrency?: string | null;
 }
 
 export interface SessionResponse {

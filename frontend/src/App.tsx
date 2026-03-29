@@ -21,6 +21,7 @@ function App() {
   const [passwordInput, setPasswordInput] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [tabName, setTabName] = useState<string | null>(null);
+  const [tabCurrency, setTabCurrency] = useState<string>('Kč');
 
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('offline');
@@ -35,6 +36,7 @@ function App() {
   const [adminTabs, setAdminTabs] = useState<AdminTab[]>([]);
   const [newTabName, setNewTabName] = useState('');
   const [newTabPassword, setNewTabPassword] = useState('');
+  const [newTabCurrency, setNewTabCurrency] = useState('Kč');
 
   const [isWorking, setIsWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -93,6 +95,9 @@ function App() {
         const admin = Boolean(session.isAdmin);
         setIsAdmin(admin);
         setTabName(session.tabName || null);
+        if (!admin && session.tabCurrency) {
+          setTabCurrency(session.tabCurrency);
+        }
         setAuthPhase('ready');
 
         if (admin) {
@@ -138,6 +143,9 @@ function App() {
 
       if (message.type === 'state') {
         setSnapshot(message.snapshot);
+        if (message.snapshot.currency) {
+          setTabCurrency(message.snapshot.currency);
+        }
         setClockOffsetMs(message.snapshot.serverNowMs - Date.now());
         setErrorMessage(null);
         return;
@@ -227,6 +235,9 @@ function App() {
       setAuthPhase('ready');
       setIsAdmin(Boolean(result.session.isAdmin));
       setTabName(result.session.tabName || null);
+      if (!result.session.isAdmin && result.session.tabCurrency) {
+        setTabCurrency(result.session.tabCurrency);
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Password check failed');
     } finally {
@@ -367,6 +378,7 @@ function App() {
 
     const name = normalizeText(newTabName);
     const password = newTabPassword.trim();
+    const currency = newTabCurrency.trim();
 
     if (name.length < 1 || name.length > 40) {
       setErrorMessage('Tab name must be 1-40 characters.');
@@ -378,18 +390,28 @@ function App() {
       return;
     }
 
+    if (currency.length < 1 || currency.length > 5) {
+      setErrorMessage('Currency must be 1-5 characters.');
+      return;
+    }
+
     try {
-      await createTab(authToken, name, password);
+      await createTab(authToken, name, password, currency);
       setNewTabName('');
       setNewTabPassword('');
+      setNewTabCurrency('Kč');
       await refreshTabs();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to create tab');
     }
   };
 
-  const onDeleteTab = async (tabId: string) => {
+  const onDeleteTab = async (tabId: string, tabTitle: string) => {
     if (!authToken) {
+      return;
+    }
+
+    if (!window.confirm(`Delete tab “${tabTitle}”? This cannot be undone.`)) {
       return;
     }
 
@@ -409,7 +431,7 @@ function App() {
         <section className="card gate-card">
           <h1>dosh</h1>
           <p>Shared tab splitting, live for everyone in the room.</p>
-          <p className="hint">Enter tab password, or use admin password to manage tabs.</p>
+          <p className="hint">Use your tab password.</p>
 
           <form className="form-stack" onSubmit={onSubmitPassword}>
             <div>
@@ -468,6 +490,10 @@ function App() {
                 <label htmlFor="tabPassword">Tab password</label>
                 <input id="tabPassword" type="password" value={newTabPassword} onChange={(event) => setNewTabPassword(event.target.value)} maxLength={80} />
               </div>
+              <div>
+                <label htmlFor="tabCurrency">Currency (1-5 chars)</label>
+                <input id="tabCurrency" type="text" value={newTabCurrency} onChange={(event) => setNewTabCurrency(event.target.value)} maxLength={5} />
+              </div>
               <button type="submit">Create tab</button>
             </form>
           </section>
@@ -478,8 +504,8 @@ function App() {
               <ul className="metric-list">
                 {adminTabs.map((tab) => (
                   <li key={tab.id}>
-                    <span>{tab.name} · {tab.people} people · {tab.expenses} expenses</span>
-                    <button type="button" className="danger-icon" onClick={() => onDeleteTab(tab.id)}>−</button>
+                    <span>{tab.name} ({tab.currency}) · {tab.people} people · {tab.expenses} expenses</span>
+                    <button type="button" className="danger-icon" onClick={() => onDeleteTab(tab.id, tab.name)}>−</button>
                   </li>
                 ))}
               </ul>
@@ -500,7 +526,7 @@ function App() {
         <header className="topbar">
           <div>
             <h1>dosh</h1>
-            <p>{tabName ? `${tabName} · ` : ''}Split shared costs with weighted ratios.</p>
+            <p>{tabName || 'Tab'}</p>
           </div>
 
           <div className="topbar-right">
@@ -520,6 +546,9 @@ function App() {
         </header>
 
         {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+        {connectionState !== 'online' ? (
+          <p className="hint">Connecting… If Render is sleeping, wake-up can take up to ~60s.</p>
+        ) : null}
 
         <div className="main-grid">
           <section className="panel action-panel">
@@ -538,7 +567,7 @@ function App() {
                     <span>
                       <b>{transfer.fromName}</b> pays <b>{transfer.toName}</b>
                     </span>
-                    <strong>{formatMoney(transfer.amountCents)}</strong>
+                    <strong>{formatMoney(transfer.amountCents, tabCurrency)}</strong>
                   </li>
                 ))}
               </ul>
@@ -555,7 +584,7 @@ function App() {
                   <li key={balance.name}>
                     <span>{balance.name}</span>
                     <strong className={balance.netCents < 0 ? 'neg' : balance.netCents > 0 ? 'pos' : ''}>
-                      {formatSignedMoney(balance.netCents)}
+                      {formatSignedMoney(balance.netCents, tabCurrency)}
                     </strong>
                   </li>
                 ))}
@@ -574,14 +603,14 @@ function App() {
                     <div>
                       <strong>{expense.description}</strong>
                       <p>
-                        {expense.paidByName} paid {formatMoney(expense.amountCents)}
+                        {expense.paidByName} paid {formatMoney(expense.amountCents, tabCurrency)}
                       </p>
                     </div>
                     <div className="expense-right">
                       <div className="split-readout">
                         {expense.splits.map((split) => (
                           <span key={`${expense.id}-${split.participantName}`}>
-                            {split.participantName}: {formatMoney(split.shareCents)} ({split.weight})
+                            {split.participantName}: {formatMoney(split.shareCents, tabCurrency)} ({split.weight})
                           </span>
                         ))}
                       </div>
@@ -763,20 +792,26 @@ function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function formatMoney(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+function formatMoney(cents: number, currency: string): string {
+  const amount = (cents / 100).toFixed(2);
+  const prefixCurrencies = new Set(['$', '€', '£', '¥']);
+  if (prefixCurrencies.has(currency)) {
+    return `${currency}${amount}`;
+  }
+
+  return `${amount} ${currency}`;
 }
 
-function formatSignedMoney(cents: number): string {
+function formatSignedMoney(cents: number, currency: string): string {
   if (cents > 0) {
-    return `+${formatMoney(cents)}`;
+    return `+${formatMoney(cents, currency)}`;
   }
 
   if (cents < 0) {
-    return `-${formatMoney(Math.abs(cents))}`;
+    return `-${formatMoney(Math.abs(cents), currency)}`;
   }
 
-  return formatMoney(0);
+  return formatMoney(0, currency);
 }
 
 export default App;

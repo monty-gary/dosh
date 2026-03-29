@@ -5,6 +5,8 @@ import { WebSocketServer } from 'ws';
 
 const DEFAULT_PASSWORD = 'money';
 const ADMIN_PASSWORD = process.env.DOSH_ADMIN_PASSWORD || 'moneymoney.';
+const DEFAULT_TAB_NAME = 'Pod Kotlem';
+const DEFAULT_CURRENCY = 'Kč';
 const DEFAULT_PORT = 3000;
 const OPEN_STATE = 1;
 const ADMIN_TAB_ID = '__admin__';
@@ -23,7 +25,7 @@ const clients = new Map(); // key: `${tabId}:${clientId}`
 const socketByClientKey = new Map(); // key: `${tabId}:${clientId}`
 let dbPool = null;
 
-tabs.set(DEFAULT_TAB_ID, createTabRecord(DEFAULT_TAB_ID, 'Default tab', universalPassword));
+tabs.set(DEFAULT_TAB_ID, createTabRecord(DEFAULT_TAB_ID, DEFAULT_TAB_NAME, universalPassword, DEFAULT_CURRENCY));
 
 const server = http.createServer(async (req, res) => {
   if (applyCors(req, res)) {
@@ -79,7 +81,8 @@ const server = http.createServer(async (req, res) => {
           lastSeenAtMs: Date.now(),
           isAdmin: true,
           tabId: ADMIN_TAB_ID,
-          tabName: 'Tab Admin'
+          tabName: 'Tab Admin',
+          tabCurrency: null
         }
       });
       return;
@@ -101,7 +104,8 @@ const server = http.createServer(async (req, res) => {
         ...serializeClient(session),
         isAdmin: false,
         tabId: tab.id,
-        tabName: tab.name
+        tabName: tab.name,
+        tabCurrency: tab.currency
       }
     });
     return;
@@ -132,7 +136,8 @@ const server = http.createServer(async (req, res) => {
           lastSeenAtMs: Date.now(),
           isAdmin: true,
           tabId: ADMIN_TAB_ID,
-          tabName: 'Tab Admin'
+          tabName: 'Tab Admin',
+          tabCurrency: null
         }
       });
       return;
@@ -151,7 +156,8 @@ const server = http.createServer(async (req, res) => {
         ...serializeClient(session),
         isAdmin: false,
         tabId: tab.id,
-        tabName: tab.name
+        tabName: tab.name,
+        tabCurrency: tab.currency
       }
     });
     return;
@@ -168,7 +174,13 @@ const server = http.createServer(async (req, res) => {
     writeJson(res, 200, {
       ok: true,
       tabs: Array.from(tabs.values())
-        .map((tab) => ({ id: tab.id, name: tab.name, people: tab.people.size, expenses: tab.expenses.length }))
+        .map((tab) => ({
+          id: tab.id,
+          name: tab.name,
+          currency: tab.currency,
+          people: tab.people.size,
+          expenses: tab.expenses.length
+        }))
         .sort((a, b) => a.name.localeCompare(b.name))
     });
     return;
@@ -189,6 +201,7 @@ const server = http.createServer(async (req, res) => {
 
     const name = normalizeTabName(body.name || '');
     const password = normalizeTabPassword(body.password || '');
+    const currency = normalizeCurrency(body.currency || '');
 
     if (!name) {
       writeJson(res, 400, { ok: false, error: 'tab name must be 1-40 characters' });
@@ -197,6 +210,11 @@ const server = http.createServer(async (req, res) => {
 
     if (!password) {
       writeJson(res, 400, { ok: false, error: 'tab password must be 1-80 characters' });
+      return;
+    }
+
+    if (!currency) {
+      writeJson(res, 400, { ok: false, error: 'currency must be 1-5 characters' });
       return;
     }
 
@@ -211,11 +229,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     const tabId = `tab-${randomUUID().slice(0, 8)}`;
-    const tab = createTabRecord(tabId, name, password);
+    const tab = createTabRecord(tabId, name, password, currency);
     tabs.set(tab.id, tab);
     await persistState();
 
-    writeJson(res, 201, { ok: true, tab: { id: tab.id, name: tab.name } });
+    writeJson(res, 201, { ok: true, tab: { id: tab.id, name: tab.name, currency: tab.currency } });
     return;
   }
 
@@ -438,11 +456,12 @@ server.listen(port, () => {
   console.log(`dosh backend listening on http://localhost:${port}`);
 });
 
-function createTabRecord(id, name, password) {
+function createTabRecord(id, name, password, currency = DEFAULT_CURRENCY) {
   return {
     id,
     name,
     password,
+    currency,
     people: new Set(),
     expenses: []
   };
@@ -512,7 +531,15 @@ async function initStorage() {
   }
 
   if (!tabs.has(DEFAULT_TAB_ID)) {
-    tabs.set(DEFAULT_TAB_ID, createTabRecord(DEFAULT_TAB_ID, 'Default tab', universalPassword));
+    tabs.set(DEFAULT_TAB_ID, createTabRecord(DEFAULT_TAB_ID, DEFAULT_TAB_NAME, universalPassword, DEFAULT_CURRENCY));
+  } else {
+    const defaultTab = tabs.get(DEFAULT_TAB_ID);
+    if (defaultTab.name === 'Default tab') {
+      defaultTab.name = DEFAULT_TAB_NAME;
+    }
+    if (!defaultTab.currency) {
+      defaultTab.currency = DEFAULT_CURRENCY;
+    }
   }
 
   await persistState();
@@ -524,6 +551,7 @@ function serializeState() {
       id: tab.id,
       name: tab.name,
       password: tab.password,
+      currency: tab.currency,
       people: Array.from(tab.people),
       expenses: tab.expenses
     }))
@@ -542,7 +570,7 @@ function hydrateState(data) {
       continue;
     }
 
-    const record = createTabRecord(tab.id, tab.name, tab.password);
+    const record = createTabRecord(tab.id, tab.name, tab.password, normalizeCurrency(tab.currency || '') || DEFAULT_CURRENCY);
 
     if (Array.isArray(tab.people)) {
       for (const name of tab.people) {
@@ -827,6 +855,7 @@ function buildSnapshot(tabId, forClientId) {
     serverNowMs: Date.now(),
     tabId: tab.id,
     tabName: tab.name,
+    currency: tab.currency,
     people: ledger.people,
     knownNames: ledger.knownNames,
     expenses: ledger.expenses,
@@ -1104,6 +1133,15 @@ function normalizeTabName(value) {
 function normalizeTabPassword(value) {
   const normalized = String(value || '').trim();
   if (normalized.length < 1 || normalized.length > 80) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeCurrency(value) {
+  const normalized = String(value || '').trim();
+  if (normalized.length < 1 || normalized.length > 5) {
     return null;
   }
 
