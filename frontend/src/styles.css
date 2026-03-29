@@ -363,9 +363,14 @@ strong.pos {
   gap: 0.18rem;
 }
 
+.expense-meta span {
+  white-space: nowrap;
+}
+
 .expense-amount {
   font-family: 'Space Mono', monospace;
   color: #ffdf93;
+  white-space: nowrap;
 }
 
 .expense-right {
@@ -376,9 +381,8 @@ strong.pos {
 }
 
 .split-readout {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  justify-items: end;
   gap: 0.35rem;
 }
 

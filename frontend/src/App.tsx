@@ -710,10 +710,11 @@ function App() {
                 ))}
                 {[...paymentExpenses].reverse().map((payment) => {
                   const payee = payment.splits[0]?.participantName || 'Unknown';
+                  const paymentLabel = getPaymentLabel(payment.description);
                   return (
                     <li key={payment.id} className="payment-item">
                       <div>
-                        <strong>Payment</strong>
+                        <strong>{paymentLabel ? `Payment (${paymentLabel})` : 'Payment'}</strong>
                         <p>{payment.paidByName} paid {payee} {formatMoney(payment.amountCents, tabCurrency)}</p>
                       </div>
                       <div className="expense-right">
@@ -987,7 +988,24 @@ function formatMoney(cents: number, currency: string): string {
     return `${currency}${amount}`;
   }
 
-  return `${amount} ${currency}`;
+  return `${amount}\u00A0${currency}`;
+}
+
+function getPaymentLabel(description: string): string {
+  if (!description.startsWith('PAY:')) {
+    return '';
+  }
+
+  const raw = description.slice(4).trim();
+  if (!raw) {
+    return '';
+  }
+
+  if (raw.includes('->')) {
+    return '';
+  }
+
+  return raw;
 }
 
 function formatSignedMoney(cents: number, currency: string): string {
