@@ -1,6 +1,8 @@
 import type { SessionResponse } from './types';
 
-const PRODUCTION_FALLBACK_API = 'http://localhost:3000';
+// For GitHub Pages production builds, point this at your deployed Render backend URL.
+// Example: https://dosh-backend.onrender.com
+const PRODUCTION_FALLBACK_API = 'https://your-render-backend.onrender.com';
 
 export const API_BASE_URL = resolveApiBaseUrl();
 export const WS_URL = toWebSocketUrl(API_BASE_URL);

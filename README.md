@@ -41,3 +41,10 @@ Backend supports:
 
 Frontend supports:
 - `VITE_API_BASE_URL` (optional; defaults to `http://localhost:3000` on localhost)
+
+## Deploy
+- Frontend is configured for GitHub Pages under `/dosh/` via `.github/workflows/pages.yml` (runs on pushes to `main` and `dev`).
+- Production API calls should target your hosted backend (for example Render):
+  - Set `VITE_API_BASE_URL` at build time, or
+  - Update `PRODUCTION_FALLBACK_API` in `frontend/src/api.ts`.
+- Local development behavior is unchanged: `localhost` still uses `http://localhost:3000`.
