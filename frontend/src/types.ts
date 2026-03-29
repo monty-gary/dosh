@@ -42,9 +42,15 @@ export interface Snapshot {
   self: ClientState;
 }
 
+export interface SessionData extends ClientState {
+  isAdmin?: boolean;
+  tabId?: string;
+  tabName?: string;
+}
+
 export interface SessionResponse {
   ok: boolean;
-  session: ClientState;
+  session: SessionData;
 }
 
 export type ServerMessage =

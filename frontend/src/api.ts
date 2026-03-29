@@ -42,6 +42,52 @@ export async function getSession(token: string, clientId: string): Promise<Sessi
   return payload.session;
 }
 
+export interface AdminTab {
+  id: string;
+  name: string;
+  people: number;
+  expenses: number;
+}
+
+export async function listTabs(token: string): Promise<AdminTab[]> {
+  const params = new URLSearchParams({ token });
+  const response = await fetch(`${API_BASE_URL}/api/tabs?${params.toString()}`);
+  const payload = await response.json();
+
+  if (!response.ok || !payload?.ok || !Array.isArray(payload?.tabs)) {
+    throw new Error(payload?.error || 'Failed to load tabs');
+  }
+
+  return payload.tabs;
+}
+
+export async function createTab(token: string, name: string, password: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/tabs`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ token, name, password })
+  });
+
+  const payload = await response.json();
+  if (!response.ok || !payload?.ok) {
+    throw new Error(payload?.error || 'Failed to create tab');
+  }
+}
+
+export async function deleteTab(token: string, tabId: string): Promise<void> {
+  const params = new URLSearchParams({ token });
+  const response = await fetch(`${API_BASE_URL}/api/tabs/${encodeURIComponent(tabId)}?${params.toString()}`, {
+    method: 'DELETE'
+  });
+
+  const payload = await response.json();
+  if (!response.ok || !payload?.ok) {
+    throw new Error(payload?.error || 'Failed to delete tab');
+  }
+}
+
 function resolveApiBaseUrl(): string {
   const configured = import.meta.env.VITE_API_BASE_URL;
   if (configured && typeof configured === 'string' && configured.length > 0) {

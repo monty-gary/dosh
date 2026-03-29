@@ -205,6 +205,15 @@ button.ghost {
   padding: 0.8rem;
 }
 
+.action-buttons {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.action-buttons > button {
+  flex: 1;
+}
+
 .form-panel {
   grid-row: auto;
 }

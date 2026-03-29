@@ -3,8 +3,11 @@ import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 
 const DEFAULT_PASSWORD = 'money';
+const ADMIN_PASSWORD = process.env.DOSH_ADMIN_PASSWORD || 'moneymoney.';
 const DEFAULT_PORT = 3000;
 const OPEN_STATE = 1;
+const ADMIN_TAB_ID = '__admin__';
+const DEFAULT_TAB_ID = 'default';
 
 const port = Number(process.env.PORT || DEFAULT_PORT);
 const universalPassword = process.env.DOSH_PASSWORD || DEFAULT_PASSWORD;
@@ -13,10 +16,11 @@ const TOKEN_SECRET = process.env.DOSH_TOKEN_SECRET || 'dosh-demo-token-secret';
 const rawTokenTtlMs = Number(process.env.DOSH_TOKEN_TTL_MS ?? '0');
 const TOKEN_TTL_MS = Number.isFinite(rawTokenTtlMs) && rawTokenTtlMs > 0 ? rawTokenTtlMs : 0;
 
-const clients = new Map();
-const socketByClientId = new Map();
-const expenses = [];
-const people = new Set();
+const tabs = new Map();
+const clients = new Map(); // key: `${tabId}:${clientId}`
+const socketByClientKey = new Map(); // key: `${tabId}:${clientId}`
+
+tabs.set(DEFAULT_TAB_ID, createTabRecord(DEFAULT_TAB_ID, 'Default tab', universalPassword));
 
 const server = http.createServer(async (req, res) => {
   if (applyCors(req, res)) {
@@ -36,10 +40,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === 'GET' && url.pathname === '/health') {
+    const totalExpenses = Array.from(tabs.values()).reduce((sum, tab) => sum + tab.expenses.length, 0);
+    const totalPeople = Array.from(tabs.values()).reduce((sum, tab) => sum + tab.people.size, 0);
     writeJson(res, 200, {
       ok: true,
-      people: people.size,
-      expenses: expenses.length
+      tabs: tabs.size,
+      people: totalPeople,
+      expenses: totalExpenses
     });
     return;
   }
@@ -51,24 +58,48 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (body.password !== universalPassword) {
-      writeJson(res, 401, { ok: false, error: 'invalid password' });
-      return;
-    }
-
     const clientId = sanitizeClientId(body.clientId);
     if (!clientId) {
       writeJson(res, 400, { ok: false, error: 'clientId is required' });
       return;
     }
 
-    const session = getOrCreateClient(clientId);
-    const token = createSessionToken(clientId);
+    if (body.password === ADMIN_PASSWORD) {
+      const token = createSessionToken({ clientId, tabId: ADMIN_TAB_ID, isAdmin: true });
+      writeJson(res, 200, {
+        ok: true,
+        token,
+        session: {
+          clientId,
+          username: null,
+          connected: false,
+          lastSeenAtMs: Date.now(),
+          isAdmin: true,
+          tabId: ADMIN_TAB_ID,
+          tabName: 'Tab Admin'
+        }
+      });
+      return;
+    }
+
+    const tab = findTabByPassword(body.password);
+    if (!tab) {
+      writeJson(res, 401, { ok: false, error: 'invalid password' });
+      return;
+    }
+
+    const session = getOrCreateClient(tab.id, clientId);
+    const token = createSessionToken({ clientId, tabId: tab.id, isAdmin: false });
 
     writeJson(res, 200, {
       ok: true,
       token,
-      session: serializeClient(session)
+      session: {
+        ...serializeClient(session),
+        isAdmin: false,
+        tabId: tab.id,
+        tabName: tab.name
+      }
     });
     return;
   }
@@ -82,16 +113,131 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (!isTokenValidForClient(token, clientId)) {
+    const sessionToken = parseAndVerifyToken(token, clientId);
+    if (!sessionToken) {
       writeJson(res, 401, { ok: false, error: 'invalid session' });
       return;
     }
 
-    const session = getOrCreateClient(clientId);
+    if (sessionToken.isAdmin) {
+      writeJson(res, 200, {
+        ok: true,
+        session: {
+          clientId,
+          username: null,
+          connected: false,
+          lastSeenAtMs: Date.now(),
+          isAdmin: true,
+          tabId: ADMIN_TAB_ID,
+          tabName: 'Tab Admin'
+        }
+      });
+      return;
+    }
+
+    const tab = tabs.get(sessionToken.tabId);
+    if (!tab) {
+      writeJson(res, 401, { ok: false, error: 'tab no longer exists' });
+      return;
+    }
+
+    const session = getOrCreateClient(tab.id, clientId);
     writeJson(res, 200, {
       ok: true,
-      session: serializeClient(session)
+      session: {
+        ...serializeClient(session),
+        isAdmin: false,
+        tabId: tab.id,
+        tabName: tab.name
+      }
     });
+    return;
+  }
+
+  if (method === 'GET' && url.pathname === '/api/tabs') {
+    const token = url.searchParams.get('token') || '';
+    const admin = requireAdminSession(token);
+    if (!admin.ok) {
+      writeJson(res, 401, { ok: false, error: admin.error });
+      return;
+    }
+
+    writeJson(res, 200, {
+      ok: true,
+      tabs: Array.from(tabs.values())
+        .map((tab) => ({ id: tab.id, name: tab.name, people: tab.people.size, expenses: tab.expenses.length }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    });
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/api/tabs') {
+    const body = await parseJsonBody(req);
+    if (!body || typeof body.token !== 'string') {
+      writeJson(res, 400, { ok: false, error: 'token is required' });
+      return;
+    }
+
+    const admin = requireAdminSession(body.token);
+    if (!admin.ok) {
+      writeJson(res, 401, { ok: false, error: admin.error });
+      return;
+    }
+
+    const name = normalizeTabName(body.name || '');
+    const password = normalizeTabPassword(body.password || '');
+
+    if (!name) {
+      writeJson(res, 400, { ok: false, error: 'tab name must be 1-40 characters' });
+      return;
+    }
+
+    if (!password) {
+      writeJson(res, 400, { ok: false, error: 'tab password must be 1-80 characters' });
+      return;
+    }
+
+    if (password === ADMIN_PASSWORD) {
+      writeJson(res, 400, { ok: false, error: 'tab password cannot be admin password' });
+      return;
+    }
+
+    if (findTabByPassword(password)) {
+      writeJson(res, 409, { ok: false, error: 'tab password already exists' });
+      return;
+    }
+
+    const tabId = `tab-${randomUUID().slice(0, 8)}`;
+    const tab = createTabRecord(tabId, name, password);
+    tabs.set(tab.id, tab);
+
+    writeJson(res, 201, { ok: true, tab: { id: tab.id, name: tab.name } });
+    return;
+  }
+
+  if (method === 'DELETE' && url.pathname.startsWith('/api/tabs/')) {
+    const token = url.searchParams.get('token') || '';
+    const admin = requireAdminSession(token);
+    if (!admin.ok) {
+      writeJson(res, 401, { ok: false, error: admin.error });
+      return;
+    }
+
+    const tabId = decodeURIComponent(url.pathname.slice('/api/tabs/'.length));
+    if (!tabId || !tabs.has(tabId)) {
+      writeJson(res, 404, { ok: false, error: 'tab not found' });
+      return;
+    }
+
+    if (tabId === DEFAULT_TAB_ID) {
+      writeJson(res, 400, { ok: false, error: 'default tab cannot be deleted' });
+      return;
+    }
+
+    tabs.delete(tabId);
+    cleanupTabConnections(tabId);
+
+    writeJson(res, 200, { ok: true });
     return;
   }
 
@@ -109,32 +255,50 @@ server.on('upgrade', (req, socket, head) => {
 
   const token = url.searchParams.get('token') || '';
   const requestedClientId = sanitizeClientId(url.searchParams.get('clientId') || '');
+  const sessionToken = parseAndVerifyToken(token, requestedClientId);
 
-  if (!isTokenValidForClient(token, requestedClientId)) {
+  if (!sessionToken || sessionToken.isAdmin) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  if (!tabs.has(sessionToken.tabId)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;
   }
 
   wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, requestedClientId);
+    wss.emit('connection', ws, {
+      tabId: sessionToken.tabId,
+      clientId: requestedClientId
+    });
   });
 });
 
-wss.on('connection', (ws, clientId) => {
-  const client = getOrCreateClient(clientId);
+wss.on('connection', (ws, session) => {
+  const tab = tabs.get(session.tabId);
+  if (!tab) {
+    ws.close(4004, 'tab not found');
+    return;
+  }
+
+  const client = getOrCreateClient(session.tabId, session.clientId);
+  const clientKey = makeClientKey(session.tabId, session.clientId);
+
   client.connected = true;
   client.lastSeenAtMs = Date.now();
 
-  const existingSocket = socketByClientId.get(clientId);
+  const existingSocket = socketByClientKey.get(clientKey);
   if (existingSocket && existingSocket !== ws && existingSocket.readyState === OPEN_STATE) {
     existingSocket.close(4009, 'superseded by newer connection');
   }
 
-  socketByClientId.set(clientId, ws);
+  socketByClientKey.set(clientKey, ws);
 
-  sendState(ws, clientId);
-  broadcastState();
+  sendState(ws, session.tabId, session.clientId);
+  broadcastState(session.tabId);
 
   ws.on('message', (raw) => {
     const message = parseWsMessage(raw);
@@ -157,7 +321,7 @@ wss.on('connection', (ws, clientId) => {
 
       client.username = normalized;
       client.lastSeenAtMs = Date.now();
-      broadcastState();
+      broadcastState(session.tabId);
       return;
     }
 
@@ -168,9 +332,9 @@ wss.on('connection', (ws, clientId) => {
         return;
       }
 
-      people.add(name);
+      tab.people.add(name);
       client.lastSeenAtMs = Date.now();
-      broadcastState();
+      broadcastState(session.tabId);
       return;
     }
 
@@ -181,20 +345,20 @@ wss.on('connection', (ws, clientId) => {
         return;
       }
 
-      people.delete(name);
+      tab.people.delete(name);
       client.lastSeenAtMs = Date.now();
-      broadcastState();
+      broadcastState(session.tabId);
       return;
     }
 
     if (message.type === 'add_expense') {
-      const validation = validateExpenseInput(message);
+      const validation = validateExpenseInput(message, tab);
       if (!validation.ok) {
         sendError(ws, validation.error);
         return;
       }
 
-      expenses.push({
+      tab.expenses.push({
         id: randomUUID(),
         createdAtMs: Date.now(),
         description: validation.description,
@@ -205,7 +369,7 @@ wss.on('connection', (ws, clientId) => {
       });
 
       client.lastSeenAtMs = Date.now();
-      broadcastState();
+      broadcastState(session.tabId);
       return;
     }
 
@@ -216,15 +380,15 @@ wss.on('connection', (ws, clientId) => {
         return;
       }
 
-      const index = expenses.findIndex((expense) => expense.id === id);
+      const index = tab.expenses.findIndex((expense) => expense.id === id);
       if (index === -1) {
         sendError(ws, 'expense not found');
         return;
       }
 
-      expenses.splice(index, 1);
+      tab.expenses.splice(index, 1);
       client.lastSeenAtMs = Date.now();
-      broadcastState();
+      broadcastState(session.tabId);
       return;
     }
 
@@ -240,17 +404,17 @@ wss.on('connection', (ws, clientId) => {
   });
 
   ws.on('close', () => {
-    if (socketByClientId.get(clientId) === ws) {
-      socketByClientId.delete(clientId);
+    if (socketByClientKey.get(clientKey) === ws) {
+      socketByClientKey.delete(clientKey);
     }
 
-    const existing = clients.get(clientId);
+    const existing = clients.get(clientKey);
     if (existing) {
       existing.connected = false;
       existing.lastSeenAtMs = Date.now();
     }
 
-    broadcastState();
+    broadcastState(session.tabId);
   });
 
   ws.on('error', () => {
@@ -263,7 +427,58 @@ server.listen(port, () => {
   console.log(`dosh backend listening on http://localhost:${port}`);
 });
 
-function validateExpenseInput(message) {
+function createTabRecord(id, name, password) {
+  return {
+    id,
+    name,
+    password,
+    people: new Set(),
+    expenses: []
+  };
+}
+
+function findTabByPassword(password) {
+  const normalized = String(password || '');
+  for (const tab of tabs.values()) {
+    if (tab.password === normalized) {
+      return tab;
+    }
+  }
+  return null;
+}
+
+function requireAdminSession(token) {
+  const payload = parseAndVerifyToken(token, null);
+  if (!payload) {
+    return { ok: false, error: 'invalid admin session' };
+  }
+  if (!payload.isAdmin) {
+    return { ok: false, error: 'admin session required' };
+  }
+  return { ok: true, payload };
+}
+
+function cleanupTabConnections(tabId) {
+  for (const [clientKey, ws] of socketByClientKey.entries()) {
+    if (!clientKey.startsWith(`${tabId}:`)) {
+      continue;
+    }
+
+    if (ws.readyState === OPEN_STATE) {
+      ws.close(4008, 'tab deleted');
+    }
+
+    socketByClientKey.delete(clientKey);
+  }
+
+  for (const clientKey of clients.keys()) {
+    if (clientKey.startsWith(`${tabId}:`)) {
+      clients.delete(clientKey);
+    }
+  }
+}
+
+function validateExpenseInput(message, tab) {
   if (typeof message.description !== 'string') {
     return { ok: false, error: 'description is required' };
   }
@@ -288,7 +503,7 @@ function validateExpenseInput(message) {
     return { ok: false, error: 'payer name is required' };
   }
 
-  if (!people.has(paidByName)) {
+  if (!tab.people.has(paidByName)) {
     return { ok: false, error: 'payer must be selected from people list' };
   }
 
@@ -311,7 +526,7 @@ function validateExpenseInput(message) {
       return { ok: false, error: 'split participants must be unique' };
     }
 
-    if (!people.has(participantName)) {
+    if (!tab.people.has(participantName)) {
       return { ok: false, error: 'all split participants must come from people list' };
     }
 
@@ -341,28 +556,25 @@ function validateExpenseInput(message) {
   };
 }
 
-function computeLedger() {
-  // Collect all unique names from people management and expenses
-  const nameSet = new Set(people);
-  for (const expense of expenses) {
-    nameSet.add(expense.paidByName);
-    for (const split of expense.splits) {
-      nameSet.add(split.participantName);
-    }
-  }
+function computeLedger(tab) {
+  const nameSet = new Set(tab.people);
 
   const balanceMap = new Map();
   for (const name of nameSet) {
     balanceMap.set(name, 0);
   }
 
-  const normalizedExpenses = expenses.map((expense) => {
+  const normalizedExpenses = tab.expenses.map((expense) => {
     const allocations = allocateByWeights(expense.amountCents, expense.splits);
 
-    balanceMap.set(expense.paidByName, (balanceMap.get(expense.paidByName) || 0) + expense.amountCents);
+    if (nameSet.has(expense.paidByName)) {
+      balanceMap.set(expense.paidByName, (balanceMap.get(expense.paidByName) || 0) + expense.amountCents);
+    }
 
     for (const split of allocations) {
-      balanceMap.set(split.participantName, (balanceMap.get(split.participantName) || 0) - split.shareCents);
+      if (nameSet.has(split.participantName)) {
+        balanceMap.set(split.participantName, (balanceMap.get(split.participantName) || 0) - split.shareCents);
+      }
     }
 
     return {
@@ -383,7 +595,7 @@ function computeLedger() {
   const knownNames = Array.from(nameSet).sort();
 
   return {
-    people: Array.from(people).sort(),
+    people: Array.from(tab.people).sort(),
     knownNames,
     balances,
     settlements,
@@ -483,71 +695,85 @@ function computeSettlements(balances) {
   return transfers;
 }
 
-function getParticipants() {
-  return Array.from(clients.values())
-    .filter((client) => Boolean(client.username))
-    .map((client) => ({
-      clientId: client.clientId,
-      username: client.username,
-      connected: client.connected
-    }))
-    .sort((a, b) => a.username.localeCompare(b.username));
-}
+function buildSnapshot(tabId, forClientId) {
+  const tab = tabs.get(tabId);
+  if (!tab) {
+    throw new Error('tab not found');
+  }
 
-function buildSnapshot(forClientId) {
-  const self = getOrCreateClient(forClientId);
-  const ledger = computeLedger();
+  const self = getOrCreateClient(tabId, forClientId);
+  const ledger = computeLedger(tab);
 
   return {
     serverNowMs: Date.now(),
+    tabId: tab.id,
+    tabName: tab.name,
     people: ledger.people,
     knownNames: ledger.knownNames,
     expenses: ledger.expenses,
     balances: ledger.balances,
     settlements: ledger.settlements,
     clients: Array.from(clients.values())
+      .filter((client) => client.tabId === tabId)
       .map(serializeClient)
       .sort((a, b) => a.clientId.localeCompare(b.clientId)),
     self: serializeClient(self)
   };
 }
 
-function sendState(ws, clientId) {
+function sendState(ws, tabId, clientId) {
   safeSend(ws, {
     type: 'state',
-    snapshot: buildSnapshot(clientId)
+    snapshot: buildSnapshot(tabId, clientId)
   });
 }
 
-function broadcastState() {
-  for (const [clientId, ws] of socketByClientId.entries()) {
+function broadcastState(tabId) {
+  for (const [clientKey, ws] of socketByClientKey.entries()) {
     if (ws.readyState !== OPEN_STATE) {
       continue;
     }
 
-    sendState(ws, clientId);
+    const [entryTabId, clientId] = splitClientKey(clientKey);
+    if (entryTabId !== tabId) {
+      continue;
+    }
+
+    sendState(ws, tabId, clientId);
   }
 }
 
-function getOrCreateClient(clientId) {
-  const sanitized = sanitizeClientId(clientId);
-  if (!sanitized) {
-    throw new Error('invalid client id');
+function makeClientKey(tabId, clientId) {
+  return `${tabId}:${clientId}`;
+}
+
+function splitClientKey(clientKey) {
+  const separatorIndex = clientKey.indexOf(':');
+  return [clientKey.slice(0, separatorIndex), clientKey.slice(separatorIndex + 1)];
+}
+
+function getOrCreateClient(tabId, clientId) {
+  const sanitizedTabId = String(tabId || '').trim();
+  const sanitizedClientId = sanitizeClientId(clientId);
+  if (!sanitizedTabId || !sanitizedClientId) {
+    throw new Error('invalid client key');
   }
 
-  const existing = clients.get(sanitized);
+  const key = makeClientKey(sanitizedTabId, sanitizedClientId);
+  const existing = clients.get(key);
   if (existing) {
     return existing;
   }
 
   const client = {
-    clientId: sanitized,
+    tabId: sanitizedTabId,
+    clientId: sanitizedClientId,
     username: null,
     connected: false,
     lastSeenAtMs: Date.now()
   };
 
-  clients.set(sanitized, client);
+  clients.set(key, client);
   return client;
 }
 
@@ -560,18 +786,19 @@ function serializeClient(client) {
   };
 }
 
-function createSessionToken(clientId) {
-  const sanitized = sanitizeClientId(clientId);
-  if (!sanitized) {
-    throw new Error('invalid client id');
-  }
-
-  const payload = {
-    clientId: sanitized,
+function createSessionToken(payload) {
+  const normalizedPayload = {
+    clientId: sanitizeClientId(payload.clientId),
+    tabId: String(payload.tabId || '').trim(),
+    isAdmin: Boolean(payload.isAdmin),
     createdAtMs: Date.now()
   };
 
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  if (!normalizedPayload.clientId || !normalizedPayload.tabId) {
+    throw new Error('invalid token payload');
+  }
+
+  const encoded = Buffer.from(JSON.stringify(normalizedPayload), 'utf8').toString('base64url');
   const signature = createSignature(encoded);
 
   return `${encoded}.${signature}`;
@@ -581,26 +808,21 @@ function createSignature(encodedPayload) {
   return createHmac('sha256', TOKEN_SECRET).update(encodedPayload).digest('base64url');
 }
 
-function isTokenValidForClient(token, clientId) {
+function parseAndVerifyToken(token, expectedClientId) {
   if (!token) {
-    return false;
-  }
-
-  const sanitizedClientId = sanitizeClientId(clientId);
-  if (!sanitizedClientId) {
-    return false;
+    return null;
   }
 
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) {
-    return false;
+    return null;
   }
 
   let expectedSignature;
   try {
     expectedSignature = createSignature(encodedPayload);
-  } catch (error) {
-    return false;
+  } catch {
+    return null;
   }
 
   let signatureBuffer;
@@ -608,39 +830,47 @@ function isTokenValidForClient(token, clientId) {
   try {
     signatureBuffer = Buffer.from(signature, 'base64url');
     expectedBuffer = Buffer.from(expectedSignature, 'base64url');
-  } catch (error) {
-    return false;
+  } catch {
+    return null;
   }
 
   if (signatureBuffer.length !== expectedBuffer.length) {
-    return false;
+    return null;
   }
 
   if (!timingSafeEqual(signatureBuffer, expectedBuffer)) {
-    return false;
+    return null;
   }
 
   let payload;
   try {
     const decoded = Buffer.from(encodedPayload, 'base64url').toString('utf8');
     payload = JSON.parse(decoded);
-  } catch (error) {
-    return false;
+  } catch {
+    return null;
   }
 
-  if (payload.clientId !== sanitizedClientId) {
-    return false;
+  const clientId = sanitizeClientId(payload.clientId || '');
+  const tabId = String(payload.tabId || '').trim();
+  const isAdmin = Boolean(payload.isAdmin);
+  const createdAtMs = Number(payload.createdAtMs);
+
+  if (!clientId || !tabId || !Number.isFinite(createdAtMs)) {
+    return null;
   }
 
-  if (typeof payload.createdAtMs !== 'number') {
-    return false;
+  if (expectedClientId != null) {
+    const normalizedExpectedClientId = sanitizeClientId(expectedClientId);
+    if (clientId !== normalizedExpectedClientId) {
+      return null;
+    }
   }
 
-  if (TOKEN_TTL_MS > 0 && payload.createdAtMs + TOKEN_TTL_MS < Date.now()) {
-    return false;
+  if (TOKEN_TTL_MS > 0 && createdAtMs + TOKEN_TTL_MS < Date.now()) {
+    return null;
   }
 
-  return true;
+  return { clientId, tabId, isAdmin, createdAtMs };
 }
 
 function parseWsMessage(raw) {
@@ -669,7 +899,7 @@ function sendError(ws, message) {
 
 function applyCors(req, res) {
   res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
@@ -737,6 +967,24 @@ function normalizeUsername(value) {
 function normalizeName(value) {
   const normalized = String(value || '').trim().replace(/\s+/g, ' ');
   if (normalized.length < 1 || normalized.length > 24) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeTabName(value) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (normalized.length < 1 || normalized.length > 40) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeTabPassword(value) {
+  const normalized = String(value || '').trim();
+  if (normalized.length < 1 || normalized.length > 80) {
     return null;
   }
 

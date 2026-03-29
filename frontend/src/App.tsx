@@ -1,5 +1,5 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { API_BASE_URL, WS_URL, authenticate, getSession } from './api';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { API_BASE_URL, WS_URL, authenticate, createTab, deleteTab, getSession, listTabs, type AdminTab } from './api';
 import type { ClientMessage, ServerMessage, Snapshot } from './types';
 
 const STORAGE_CLIENT_ID = 'dosh.clientId';
@@ -19,6 +19,9 @@ function App() {
   const [authPhase, setAuthPhase] = useState<AuthPhase>(authToken ? 'checking' : 'required');
 
   const [passwordInput, setPasswordInput] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [tabName, setTabName] = useState<string | null>(null);
+
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('offline');
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
@@ -28,6 +31,10 @@ function App() {
   const [paidByName, setPaidByName] = useState('');
   const [splitRows, setSplitRows] = useState<SplitRow[]>([{ participantName: '', weight: '1' }]);
   const [newPersonInput, setNewPersonInput] = useState('');
+
+  const [adminTabs, setAdminTabs] = useState<AdminTab[]>([]);
+  const [newTabName, setNewTabName] = useState('');
+  const [newTabPassword, setNewTabPassword] = useState('');
 
   const [isWorking, setIsWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -50,8 +57,19 @@ function App() {
     setAuthToken(null);
     setAuthPhase('required');
     setSnapshot(null);
+    setIsAdmin(false);
+    setTabName(null);
     localStorage.removeItem(STORAGE_AUTH_TOKEN);
   }, []);
+
+  const refreshTabs = useCallback(async () => {
+    if (!authToken) {
+      return;
+    }
+
+    const tabs = await listTabs(authToken);
+    setAdminTabs(tabs);
+  }, [authToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,34 +85,50 @@ function App() {
     setAuthPhase('checking');
 
     getSession(authToken, clientId)
-      .then(() => {
-        if (!cancelled) {
-          setAuthPhase('ready');
+      .then(async (session) => {
+        if (cancelled) {
+          return;
+        }
+
+        const admin = Boolean(session.isAdmin);
+        setIsAdmin(admin);
+        setTabName(session.tabName || null);
+        setAuthPhase('ready');
+
+        if (admin) {
+          await refreshTabs();
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          clearAuth();
-          setErrorMessage('Session expired. Enter the password again.');
+        if (cancelled) {
+          return;
         }
+
+        clearAuth();
+        setErrorMessage('Session expired. Enter the password again.');
       });
 
     return () => {
       cancelled = true;
     };
-  }, [authToken, clientId, clearAuth]);
+  }, [authToken, clientId, clearAuth, refreshTabs]);
 
   useEffect(() => {
-    if (authPhase !== 'ready' || !authToken) {
+    if (authPhase !== 'ready' || !authToken || isAdmin) {
       return;
     }
 
     setConnectionState('connecting');
 
-    const ws = new WebSocket(`${WS_URL}/ws?token=${encodeURIComponent(authToken)}&clientId=${encodeURIComponent(clientId)}`);
+    const ws = new WebSocket(
+      `${WS_URL}/ws?token=${encodeURIComponent(authToken)}&clientId=${encodeURIComponent(clientId)}`
+    );
+
     socketRef.current = ws;
 
-    ws.onopen = () => setConnectionState('online');
+    ws.onopen = () => {
+      setConnectionState('online');
+    };
 
     ws.onmessage = (event) => {
       const message = safeParseMessage(event.data);
@@ -106,33 +140,47 @@ function App() {
         setSnapshot(message.snapshot);
         setClockOffsetMs(message.snapshot.serverNowMs - Date.now());
         setErrorMessage(null);
-      } else if (message.type === 'error') {
+        return;
+      }
+
+      if (message.type === 'error') {
         setErrorMessage(message.message);
-      } else if (message.type === 'pong') {
+        return;
+      }
+
+      if (message.type === 'pong') {
         setClockOffsetMs(message.serverNowMs - Date.now());
       }
     };
 
-    ws.onerror = () => setConnectionState('offline');
+    ws.onerror = () => {
+      setConnectionState('offline');
+    };
+
     ws.onclose = () => {
       if (socketRef.current === ws) {
         socketRef.current = null;
       }
+
       setConnectionState('offline');
     };
 
-    const pingId = window.setInterval(() => sendWsMessage({ type: 'ping' }), 5000);
+    const pingId = window.setInterval(() => {
+      sendWsMessage({ type: 'ping' });
+    }, 5000);
 
     return () => {
       window.clearInterval(pingId);
+
       if (socketRef.current === ws) {
         socketRef.current = null;
       }
+
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
       }
     };
-  }, [authPhase, authToken, clientId, sendWsMessage]);
+  }, [authPhase, authToken, clientId, isAdmin, sendWsMessage]);
 
   const people = snapshot?.people || [];
 
@@ -144,8 +192,28 @@ function App() {
     }
 
     setPaidByName((current) => (current && people.includes(current) ? current : people[0]));
-    setSplitRows((rows) => rows.map((row) => ({ ...row, participantName: row.participantName && people.includes(row.participantName) ? row.participantName : people[0] })));
+
+    setSplitRows((rows) => {
+      const used = new Set<string>();
+      return rows.map((row) => {
+        const valid = row.participantName && people.includes(row.participantName) && !used.has(row.participantName)
+          ? row.participantName
+          : people.find((name) => !used.has(name)) || '';
+
+        if (valid) {
+          used.add(valid);
+        }
+
+        return {
+          ...row,
+          participantName: valid
+        };
+      });
+    });
   }, [people]);
+
+  const usedSplitPeople = useMemo(() => new Set(splitRows.map((row) => row.participantName).filter(Boolean)), [splitRows]);
+  const canAddSplitRow = people.some((name) => !usedSplitPeople.has(name));
 
   const onSubmitPassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -157,6 +225,8 @@ function App() {
       setAuthToken(result.token);
       localStorage.setItem(STORAGE_AUTH_TOKEN, result.token);
       setAuthPhase('ready');
+      setIsAdmin(Boolean(result.session.isAdmin));
+      setTabName(result.session.tabName || null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Password check failed');
     } finally {
@@ -166,6 +236,8 @@ function App() {
 
   const onAddPerson = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setErrorMessage(null);
+
     const name = normalizeText(newPersonInput);
     if (name.length < 1 || name.length > 24) {
       setErrorMessage('Person name must be 1-24 characters.');
@@ -178,10 +250,12 @@ function App() {
   };
 
   const onRemovePerson = (name: string) => {
+    setErrorMessage(null);
     sendWsMessage({ type: 'remove_person', name });
   };
 
   const onRemoveExpense = (id: string) => {
+    setErrorMessage(null);
     sendWsMessage({ type: 'remove_expense', id });
   };
 
@@ -189,11 +263,35 @@ function App() {
     setSplitRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   };
 
-  const onAddSplitRow = () => setSplitRows((rows) => [...rows, { participantName: people[0] || '', weight: '1' }]);
-  const onRemoveSplitRow = (index: number) => setSplitRows((rows) => rows.filter((_, i) => i !== index));
+  const onAddSplitRow = () => {
+    const used = new Set(splitRows.map((row) => row.participantName).filter(Boolean));
+    const next = people.find((name) => !used.has(name));
+    if (!next) {
+      return;
+    }
+
+    setSplitRows((rows) => [...rows, { participantName: next, weight: '1' }]);
+  };
+
+  const onRemoveSplitRow = (index: number) => {
+    setSplitRows((rows) => rows.filter((_, i) => i !== index));
+  };
+
+  const availablePeopleForRow = (index: number) => {
+    const current = splitRows[index]?.participantName || '';
+    const usedByOthers = new Set(
+      splitRows
+        .filter((_, i) => i !== index)
+        .map((row) => row.participantName)
+        .filter(Boolean)
+    );
+
+    return people.filter((name) => name === current || !usedByOthers.has(name));
+  };
 
   const onSubmitExpense = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setErrorMessage(null);
 
     if (people.length === 0) {
       setErrorMessage('Add people first.');
@@ -221,19 +319,28 @@ function App() {
       .map((row) => ({ participantName: row.participantName, weight: Number(row.weight) }))
       .filter((s) => s.participantName.length > 0);
 
-    if (!splits.length) {
+    if (splits.length === 0) {
       setErrorMessage('Add at least one person in "For whom".');
       return;
     }
 
-    if (splits.some((s) => !people.includes(s.participantName))) {
-      setErrorMessage('Each split participant must be selected from people list.');
-      return;
-    }
+    const dedup = new Set<string>();
+    for (const split of splits) {
+      if (!people.includes(split.participantName)) {
+        setErrorMessage('Each split participant must be selected from people list.');
+        return;
+      }
 
-    if (splits.some((s) => !Number.isFinite(s.weight) || s.weight <= 0)) {
-      setErrorMessage('Each weight must be a positive number.');
-      return;
+      if (dedup.has(split.participantName)) {
+        setErrorMessage('Each person can be in "For whom" only once.');
+        return;
+      }
+      dedup.add(split.participantName);
+
+      if (!Number.isFinite(split.weight) || split.weight <= 0) {
+        setErrorMessage('Each weight must be a positive number.');
+        return;
+      }
     }
 
     sendWsMessage({
@@ -250,13 +357,59 @@ function App() {
     setShowExpenseModal(false);
   };
 
+  const onCreateTab = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!authToken) {
+      return;
+    }
+
+    setErrorMessage(null);
+
+    const name = normalizeText(newTabName);
+    const password = newTabPassword.trim();
+
+    if (name.length < 1 || name.length > 40) {
+      setErrorMessage('Tab name must be 1-40 characters.');
+      return;
+    }
+
+    if (password.length < 1 || password.length > 80) {
+      setErrorMessage('Tab password must be 1-80 characters.');
+      return;
+    }
+
+    try {
+      await createTab(authToken, name, password);
+      setNewTabName('');
+      setNewTabPassword('');
+      await refreshTabs();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to create tab');
+    }
+  };
+
+  const onDeleteTab = async (tabId: string) => {
+    if (!authToken) {
+      return;
+    }
+
+    setErrorMessage(null);
+
+    try {
+      await deleteTab(authToken, tabId);
+      await refreshTabs();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to delete tab');
+    }
+  };
+
   if (authPhase === 'required' || authPhase === 'checking') {
     return (
       <div className="app-shell">
         <section className="card gate-card">
           <h1>dosh</h1>
           <p>Shared tab splitting, live for everyone in the room.</p>
-          <p className="hint">Enter the shared password to continue.</p>
+          <p className="hint">Enter tab password, or use admin password to manage tabs.</p>
 
           <form className="form-stack" onSubmit={onSubmitPassword}>
             <div>
@@ -283,13 +436,71 @@ function App() {
     );
   }
 
+  if (isAdmin) {
+    return (
+      <div className="app-shell main-shell">
+        <section className="app-frame">
+          <header className="topbar">
+            <div>
+              <h1>Tab Admin</h1>
+              <p>Create and delete tabs (name + password).</p>
+            </div>
+            <div className="topbar-right">
+              <button className="ghost" onClick={() => {
+                clearAuth();
+                setPasswordInput('');
+              }}>
+                Exit Admin
+              </button>
+            </div>
+          </header>
+
+          {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+
+          <section className="panel">
+            <h2>Create tab</h2>
+            <form className="form-stack" onSubmit={onCreateTab}>
+              <div>
+                <label htmlFor="tabName">Tab name</label>
+                <input id="tabName" type="text" value={newTabName} onChange={(event) => setNewTabName(event.target.value)} maxLength={40} />
+              </div>
+              <div>
+                <label htmlFor="tabPassword">Tab password</label>
+                <input id="tabPassword" type="password" value={newTabPassword} onChange={(event) => setNewTabPassword(event.target.value)} maxLength={80} />
+              </div>
+              <button type="submit">Create tab</button>
+            </form>
+          </section>
+
+          <section className="panel">
+            <h2>Existing tabs</h2>
+            {adminTabs.length ? (
+              <ul className="metric-list">
+                {adminTabs.map((tab) => (
+                  <li key={tab.id}>
+                    <span>{tab.name} · {tab.people} people · {tab.expenses} expenses</span>
+                    <button type="button" className="danger-icon" onClick={() => onDeleteTab(tab.id)}>−</button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hint">No tabs yet.</p>
+            )}
+          </section>
+
+          <div className="api-line">API URL: {API_BASE_URL}</div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell main-shell">
       <section className="app-frame">
         <header className="topbar">
           <div>
             <h1>dosh</h1>
-            <p>Split shared costs with weighted ratios.</p>
+            <p>{tabName ? `${tabName} · ` : ''}Split shared costs with weighted ratios.</p>
           </div>
 
           <div className="topbar-right">
@@ -312,7 +523,7 @@ function App() {
 
         <div className="main-grid">
           <section className="panel action-panel">
-            <div className="inline-grid">
+            <div className="action-buttons">
               <button type="button" onClick={() => setShowExpenseModal(true)}>Add Expense</button>
               <button type="button" onClick={() => setShowPersonModal(true)}>Add Person</button>
             </div>
@@ -362,7 +573,9 @@ function App() {
                   <li key={expense.id}>
                     <div>
                       <strong>{expense.description}</strong>
-                      <p>{expense.paidByName} paid {formatMoney(expense.amountCents)}</p>
+                      <p>
+                        {expense.paidByName} paid {formatMoney(expense.amountCents)}
+                      </p>
                     </div>
                     <div className="expense-right">
                       <div className="split-readout">
@@ -413,18 +626,39 @@ function App() {
             <form className="form-stack" onSubmit={onSubmitExpense}>
               <div>
                 <label htmlFor="desc">Description</label>
-                <input id="desc" type="text" maxLength={80} value={descriptionInput} onChange={(event) => setDescriptionInput(event.target.value)} />
+                <input
+                  id="desc"
+                  type="text"
+                  maxLength={80}
+                  value={descriptionInput}
+                  onChange={(event) => setDescriptionInput(event.target.value)}
+                />
               </div>
 
               <div className="inline-grid">
                 <div>
                   <label htmlFor="amount">Amount</label>
-                  <input id="amount" type="number" min="0" step="0.01" inputMode="decimal" value={amountInput} onChange={(event) => setAmountInput(event.target.value)} />
+                  <input
+                    id="amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={amountInput}
+                    onChange={(event) => setAmountInput(event.target.value)}
+                  />
                 </div>
                 <div>
                   <label htmlFor="payer">Who paid</label>
-                  <select id="payer" value={paidByName} onChange={(event) => setPaidByName(event.target.value)} disabled={!people.length}>
-                    {people.map((name) => <option key={name} value={name}>{name}</option>)}
+                  <select
+                    id="payer"
+                    value={paidByName}
+                    onChange={(event) => setPaidByName(event.target.value)}
+                    disabled={people.length === 0}
+                  >
+                    {people.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -434,19 +668,36 @@ function App() {
                 <div className="split-rows">
                   {splitRows.map((row, index) => (
                     <div className="split-row-input" key={index}>
-                      <select value={row.participantName} onChange={(event) => onUpdateSplitRow(index, 'participantName', event.target.value)} disabled={!people.length}>
-                        {people.map((name) => <option key={name} value={name}>{name}</option>)}
+                      <select
+                        value={row.participantName}
+                        onChange={(event) => onUpdateSplitRow(index, 'participantName', event.target.value)}
+                        disabled={people.length === 0}
+                      >
+                        {availablePeopleForRow(index).map((name) => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
                       </select>
-                      <input type="number" min="0" step="0.1" inputMode="decimal" value={row.weight} onChange={(event) => onUpdateSplitRow(index, 'weight', event.target.value)} />
-                      {splitRows.length > 1 ? <button type="button" className="ghost remove-btn" onClick={() => onRemoveSplitRow(index)}>✕</button> : null}
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        inputMode="decimal"
+                        value={row.weight}
+                        onChange={(event) => onUpdateSplitRow(index, 'weight', event.target.value)}
+                      />
+                      {splitRows.length > 1 ? (
+                        <button type="button" className="ghost remove-btn" onClick={() => onRemoveSplitRow(index)}>✕</button>
+                      ) : null}
                     </div>
                   ))}
                 </div>
-                <button type="button" className="ghost" onClick={onAddSplitRow} disabled={!people.length}>+ Add person</button>
+                <button type="button" className="ghost" onClick={onAddSplitRow} disabled={!canAddSplitRow}>
+                  + Add person
+                </button>
               </div>
 
               <div className="inline-grid">
-                <button type="submit" disabled={!people.length}>Save</button>
+                <button type="submit" disabled={people.length === 0}>Save</button>
                 <button type="button" className="ghost" onClick={() => setShowExpenseModal(false)}>Cancel</button>
               </div>
             </form>
@@ -461,7 +712,13 @@ function App() {
             <form className="form-stack" onSubmit={onAddPerson}>
               <div>
                 <label htmlFor="personName">Name</label>
-                <input id="personName" type="text" maxLength={24} value={newPersonInput} onChange={(event) => setNewPersonInput(event.target.value)} />
+                <input
+                  id="personName"
+                  type="text"
+                  maxLength={24}
+                  value={newPersonInput}
+                  onChange={(event) => setNewPersonInput(event.target.value)}
+                />
               </div>
               <div className="inline-grid">
                 <button type="submit">Save</button>
@@ -480,6 +737,7 @@ function safeParseMessage(raw: unknown): ServerMessage | null {
     if (typeof raw !== 'string') {
       return null;
     }
+
     return JSON.parse(raw) as ServerMessage;
   } catch {
     return null;
@@ -492,9 +750,10 @@ function getOrCreateClientId(): string {
     return existing;
   }
 
-  const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `client-${Math.random().toString(36).slice(2, 11)}`;
+  const generated =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `client-${Math.random().toString(36).slice(2, 11)}`;
 
   localStorage.setItem(STORAGE_CLIENT_ID, generated);
   return generated;
@@ -512,9 +771,11 @@ function formatSignedMoney(cents: number): string {
   if (cents > 0) {
     return `+${formatMoney(cents)}`;
   }
+
   if (cents < 0) {
     return `-${formatMoney(Math.abs(cents))}`;
   }
+
   return formatMoney(0);
 }
 
