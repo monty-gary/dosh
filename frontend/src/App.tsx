@@ -1,7 +1,6 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { API_BASE_URL, WS_URL, authenticate, getSession } from './api';
 import type {
-  Balance,
   ClientMessage,
   ServerMessage,
   Snapshot
@@ -9,13 +8,13 @@ import type {
 
 const STORAGE_CLIENT_ID = 'dosh.clientId';
 const STORAGE_AUTH_TOKEN = 'dosh.authToken';
-const STORAGE_USERNAME = 'dosh.username';
 
 type AuthPhase = 'checking' | 'required' | 'ready';
 type ConnectionState = 'offline' | 'connecting' | 'online';
 
-interface DraftWeights {
-  [participantId: string]: string;
+interface SplitRow {
+  name: string;
+  weight: string;
 }
 
 function App() {
@@ -24,7 +23,6 @@ function App() {
   const [authPhase, setAuthPhase] = useState<AuthPhase>(authToken ? 'checking' : 'required');
 
   const [passwordInput, setPasswordInput] = useState('');
-  const [usernameInput, setUsernameInput] = useState<string>(() => localStorage.getItem(STORAGE_USERNAME) || '');
 
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('offline');
@@ -32,9 +30,8 @@ function App() {
 
   const [descriptionInput, setDescriptionInput] = useState('');
   const [amountInput, setAmountInput] = useState('');
-  const [paidByClientId, setPaidByClientId] = useState('');
-  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([]);
-  const [draftWeights, setDraftWeights] = useState<DraftWeights>({});
+  const [paidByName, setPaidByName] = useState('');
+  const [splitRows, setSplitRows] = useState<SplitRow[]>([{ name: '', weight: '1' }]);
 
   const [isWorking, setIsWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -72,22 +69,12 @@ function App() {
     setAuthPhase('checking');
 
     getSession(authToken, clientId)
-      .then((session) => {
-        if (cancelled) {
-          return;
-        }
-
+      .then(() => {
+        if (cancelled) return;
         setAuthPhase('ready');
-        if (session.username) {
-          setUsernameInput(session.username);
-          localStorage.setItem(STORAGE_USERNAME, session.username);
-        }
       })
       .catch(() => {
-        if (cancelled) {
-          return;
-        }
-
+        if (cancelled) return;
         clearAuth();
         setErrorMessage('Session expired. Enter the password again.');
       });
@@ -124,12 +111,6 @@ function App() {
         setSnapshot(message.snapshot);
         setClockOffsetMs(message.snapshot.serverNowMs - Date.now());
         setErrorMessage(null);
-
-        if (message.snapshot.self.username) {
-          setUsernameInput(message.snapshot.self.username);
-          localStorage.setItem(STORAGE_USERNAME, message.snapshot.self.username);
-        }
-
         return;
       }
 
@@ -172,64 +153,7 @@ function App() {
     };
   }, [authPhase, authToken, clientId, sendWsMessage]);
 
-  const participants = snapshot?.participants || [];
-  const self = snapshot?.self || null;
-  const hasUsername = Boolean(self?.username);
-
-  useEffect(() => {
-    if (!participants.length) {
-      setPaidByClientId('');
-      setSelectedParticipantIds([]);
-      setDraftWeights({});
-      return;
-    }
-
-    setPaidByClientId((current) => {
-      if (current && participants.some((participant) => participant.clientId === current)) {
-        return current;
-      }
-
-      if (self?.clientId && participants.some((participant) => participant.clientId === self.clientId)) {
-        return self.clientId;
-      }
-
-      return participants[0].clientId;
-    });
-
-    setSelectedParticipantIds((current) => {
-      const validCurrent = current.filter((id) => participants.some((participant) => participant.clientId === id));
-      if (validCurrent.length > 0) {
-        return validCurrent;
-      }
-
-      if (self?.clientId && participants.some((participant) => participant.clientId === self.clientId)) {
-        return [self.clientId];
-      }
-
-      return [participants[0].clientId];
-    });
-
-    setDraftWeights((current) => {
-      const next: DraftWeights = {};
-      for (const participant of participants) {
-        if (current[participant.clientId]) {
-          next[participant.clientId] = current[participant.clientId];
-        }
-      }
-
-      return next;
-    });
-  }, [participants, self?.clientId]);
-
-  const balancesById = useMemo(() => {
-    const map = new Map<string, Balance>();
-
-    for (const balance of snapshot?.balances || []) {
-      map.set(balance.participantClientId, balance);
-    }
-
-    return map;
-  }, [snapshot?.balances]);
+  const knownNames = snapshot?.knownNames || [];
 
   const onSubmitPassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -241,10 +165,6 @@ function App() {
       setAuthToken(result.token);
       localStorage.setItem(STORAGE_AUTH_TOKEN, result.token);
       setAuthPhase('ready');
-      if (result.session.username) {
-        setUsernameInput(result.session.username);
-        localStorage.setItem(STORAGE_USERNAME, result.session.username);
-      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Password check failed');
     } finally {
@@ -252,42 +172,16 @@ function App() {
     }
   };
 
-  const onSubmitUsername = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setErrorMessage(null);
-
-    const normalized = normalizeText(usernameInput);
-    if (normalized.length < 2 || normalized.length > 24) {
-      setErrorMessage('Name must be 2-24 characters.');
-      return;
-    }
-
-    sendWsMessage({
-      type: 'set_username',
-      username: normalized
-    });
+  const onUpdateSplitRow = (index: number, field: keyof SplitRow, value: string) => {
+    setSplitRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   };
 
-  const onToggleParticipant = (participantId: string) => {
-    setSelectedParticipantIds((current) => {
-      if (current.includes(participantId)) {
-        return current.filter((id) => id !== participantId);
-      }
-
-      return [...current, participantId];
-    });
-
-    setDraftWeights((current) => ({
-      ...current,
-      [participantId]: current[participantId] || '1'
-    }));
+  const onAddSplitRow = () => {
+    setSplitRows((rows) => [...rows, { name: '', weight: '1' }]);
   };
 
-  const onChangeWeight = (participantId: string, value: string) => {
-    setDraftWeights((current) => ({
-      ...current,
-      [participantId]: value
-    }));
+  const onRemoveSplitRow = (index: number) => {
+    setSplitRows((rows) => rows.filter((_, i) => i !== index));
   };
 
   const onSubmitExpense = (event: FormEvent<HTMLFormElement>) => {
@@ -306,25 +200,27 @@ function App() {
       return;
     }
 
-    if (!paidByClientId) {
-      setErrorMessage('Choose who paid.');
+    const payer = normalizeText(paidByName);
+    if (payer.length < 1 || payer.length > 24) {
+      setErrorMessage('Payer name is required (max 24 chars).');
       return;
     }
 
-    const splits = selectedParticipantIds.map((participantClientId) => {
-      const rawWeight = draftWeights[participantClientId] || '1';
-      return {
-        participantClientId,
-        weight: Number(rawWeight)
-      };
-    });
+    const splits = splitRows
+      .map((row) => ({ participantName: normalizeText(row.name), weight: Number(row.weight) }))
+      .filter((s) => s.participantName.length > 0);
 
     if (splits.length === 0) {
-      setErrorMessage('Choose at least one person in “For whom”.');
+      setErrorMessage('Add at least one person in "For whom".');
       return;
     }
 
-    if (splits.some((split) => !Number.isFinite(split.weight) || split.weight <= 0)) {
+    if (splits.some((s) => s.participantName.length > 24)) {
+      setErrorMessage('Each participant name must be max 24 chars.');
+      return;
+    }
+
+    if (splits.some((s) => !Number.isFinite(s.weight) || s.weight <= 0)) {
       setErrorMessage('Each weight must be a positive number.');
       return;
     }
@@ -333,12 +229,13 @@ function App() {
       type: 'add_expense',
       description,
       amount,
-      paidByClientId,
+      paidByName: payer,
       splits
     });
 
     setDescriptionInput('');
     setAmountInput('');
+    setSplitRows([{ name: '', weight: '1' }]);
   };
 
   if (authPhase === 'required' || authPhase === 'checking') {
@@ -378,39 +275,6 @@ function App() {
     );
   }
 
-  if (!hasUsername) {
-    return (
-      <div className="app-shell">
-        <section className="card gate-card">
-          <h1>Who’s joining?</h1>
-          <p>Choose a display name so others can add you to expense splits.</p>
-
-          <form className="form-stack" onSubmit={onSubmitUsername}>
-            <div>
-              <label htmlFor="username">Your name</label>
-              <input
-                id="username"
-                type="text"
-                autoComplete="nickname"
-                value={usernameInput}
-                onChange={(event) => setUsernameInput(event.target.value)}
-                maxLength={24}
-                placeholder="Alex"
-              />
-            </div>
-
-            <button type="submit" disabled={usernameInput.trim().length < 2}>
-              Continue
-            </button>
-          </form>
-
-          <p className="hint">Connected: {connectionState}</p>
-          {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-        </section>
-      </div>
-    );
-  }
-
   return (
     <div className="app-shell main-shell">
       <section className="app-frame">
@@ -437,6 +301,12 @@ function App() {
         </header>
 
         {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+
+        <datalist id="known-names">
+          {knownNames.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
 
         <div className="main-grid">
           <section className="panel form-panel">
@@ -471,69 +341,54 @@ function App() {
 
                 <div>
                   <label htmlFor="payer">Who paid</label>
-                  <select
+                  <input
                     id="payer"
-                    value={paidByClientId}
-                    onChange={(event) => setPaidByClientId(event.target.value)}
-                  >
-                    {participants.map((participant) => (
-                      <option key={participant.clientId} value={participant.clientId}>
-                        {participant.username}
-                      </option>
-                    ))}
-                  </select>
+                    type="text"
+                    list="known-names"
+                    placeholder="Name…"
+                    maxLength={24}
+                    value={paidByName}
+                    onChange={(event) => setPaidByName(event.target.value)}
+                  />
                 </div>
               </div>
 
               <div className="for-whom">
                 <label>For whom</label>
-                <div className="participant-list">
-                  {participants.map((participant) => {
-                    const selected = selectedParticipantIds.includes(participant.clientId);
-                    return (
-                      <label className={`participant-chip ${selected ? 'selected' : ''}`} key={participant.clientId}>
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={() => onToggleParticipant(participant.clientId)}
-                        />
-                        <span>{participant.username}</span>
-                        <em>{participant.connected ? 'online' : 'away'}</em>
-                      </label>
-                    );
-                  })}
+                <div className="split-rows">
+                  {splitRows.map((row, index) => (
+                    <div className="split-row-input" key={index}>
+                      <input
+                        type="text"
+                        list="known-names"
+                        placeholder="Name…"
+                        maxLength={24}
+                        value={row.name}
+                        onChange={(event) => onUpdateSplitRow(index, 'name', event.target.value)}
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        inputMode="decimal"
+                        placeholder="1"
+                        value={row.weight}
+                        onChange={(event) => onUpdateSplitRow(index, 'weight', event.target.value)}
+                      />
+                      {splitRows.length > 1 ? (
+                        <button type="button" className="ghost remove-btn" onClick={() => onRemoveSplitRow(index)}>
+                          ✕
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                  <button type="button" className="ghost" onClick={onAddSplitRow}>
+                    + Add person
+                  </button>
                 </div>
               </div>
 
-              {selectedParticipantIds.length > 0 ? (
-                <div className="weights-grid">
-                  <label>Split weights (ratio)</label>
-                  {selectedParticipantIds.map((participantId) => {
-                    const participant = participants.find((entry) => entry.clientId === participantId);
-                    if (!participant) {
-                      return null;
-                    }
-
-                    return (
-                      <div className="weight-row" key={participantId}>
-                        <span>{participant.username}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          inputMode="decimal"
-                          value={draftWeights[participantId] || '1'}
-                          onChange={(event) => onChangeWeight(participantId, event.target.value)}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-
-              <button type="submit" disabled={participants.length === 0}>
-                Add expense
-              </button>
+              <button type="submit">Add expense</button>
             </form>
           </section>
 
@@ -542,8 +397,8 @@ function App() {
             {snapshot?.balances.length ? (
               <ul className="metric-list">
                 {snapshot.balances.map((balance) => (
-                  <li key={balance.participantClientId}>
-                    <span>{balance.username}</span>
+                  <li key={balance.name}>
+                    <span>{balance.name}</span>
                     <strong className={balance.netCents < 0 ? 'neg' : balance.netCents > 0 ? 'pos' : ''}>
                       {formatSignedMoney(balance.netCents)}
                     </strong>
@@ -551,7 +406,7 @@ function App() {
                 ))}
               </ul>
             ) : (
-              <p className="hint">No named participants yet.</p>
+              <p className="hint">No expenses yet.</p>
             )}
           </section>
 
@@ -560,9 +415,9 @@ function App() {
             {snapshot?.settlements.length ? (
               <ul className="settlement-list">
                 {snapshot.settlements.map((transfer, index) => (
-                  <li key={`${transfer.fromClientId}-${transfer.toClientId}-${index}`}>
+                  <li key={`${transfer.fromName}-${transfer.toName}-${index}`}>
                     <span>
-                      <b>{transfer.fromUsername}</b> pays <b>{transfer.toUsername}</b>
+                      <b>{transfer.fromName}</b> pays <b>{transfer.toName}</b>
                     </span>
                     <strong>{formatMoney(transfer.amountCents)}</strong>
                   </li>
@@ -577,29 +432,23 @@ function App() {
             <h2>Expenses</h2>
             {snapshot?.expenses.length ? (
               <ul className="expense-list">
-                {[...snapshot.expenses].reverse().map((expense) => {
-                  const payer = participants.find((participant) => participant.clientId === expense.paidByClientId);
-                  return (
-                    <li key={expense.id}>
-                      <div>
-                        <strong>{expense.description}</strong>
-                        <p>
-                          {payer?.username || 'Unknown'} paid {formatMoney(expense.amountCents)}
-                        </p>
-                      </div>
-                      <div className="split-readout">
-                        {expense.splits.map((split) => {
-                          const participant = participants.find((entry) => entry.clientId === split.participantClientId);
-                          return (
-                            <span key={`${expense.id}-${split.participantClientId}`}>
-                              {participant?.username || 'Unknown'}: {formatMoney(split.shareCents)} ({split.weight})
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </li>
-                  );
-                })}
+                {[...snapshot.expenses].reverse().map((expense) => (
+                  <li key={expense.id}>
+                    <div>
+                      <strong>{expense.description}</strong>
+                      <p>
+                        {expense.paidByName} paid {formatMoney(expense.amountCents)}
+                      </p>
+                    </div>
+                    <div className="split-readout">
+                      {expense.splits.map((split) => (
+                        <span key={`${expense.id}-${split.participantName}`}>
+                          {split.participantName}: {formatMoney(split.shareCents)} ({split.weight})
+                        </span>
+                      ))}
+                    </div>
+                  </li>
+                ))}
               </ul>
             ) : (
               <p className="hint">No expenses yet.</p>
@@ -609,13 +458,6 @@ function App() {
 
         <footer className="footer-note">
           <span>Server time skew: {clockOffsetMs >= 0 ? '+' : ''}{clockOffsetMs}ms</span>
-          <span>Participants: {participants.length}</span>
-          <span>You: {snapshot?.self.username}</span>
-          {self ? (
-            <span>
-              Your net: <strong>{formatSignedMoney((balancesById.get(self.clientId)?.netCents || 0))}</strong>
-            </span>
-          ) : null}
         </footer>
       </section>
     </div>

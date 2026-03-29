@@ -260,6 +260,24 @@ button.ghost {
   align-items: center;
 }
 
+.split-rows {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.split-row-input {
+  display: grid;
+  grid-template-columns: 1fr 80px auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.remove-btn {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
 .metric-list,
 .settlement-list,
 .expense-list {

@@ -161,7 +161,7 @@ wss.on('connection', (ws, clientId) => {
     }
 
     if (message.type === 'add_expense') {
-      const validation = validateExpenseInput(message, client);
+      const validation = validateExpenseInput(message);
       if (!validation.ok) {
         sendError(ws, validation.error);
         return;
@@ -172,7 +172,7 @@ wss.on('connection', (ws, clientId) => {
         createdAtMs: Date.now(),
         description: validation.description,
         amountCents: validation.amountCents,
-        paidByClientId: validation.paidByClientId,
+        paidByName: validation.paidByName,
         splits: validation.splits,
         createdByClientId: client.clientId
       });
@@ -217,11 +217,7 @@ server.listen(port, () => {
   console.log(`dosh backend listening on http://localhost:${port}`);
 });
 
-function validateExpenseInput(message, self) {
-  if (!self.username) {
-    return { ok: false, error: 'set your name first' };
-  }
-
+function validateExpenseInput(message) {
   if (typeof message.description !== 'string') {
     return { ok: false, error: 'description is required' };
   }
@@ -241,14 +237,9 @@ function validateExpenseInput(message, self) {
     return { ok: false, error: 'amount is invalid' };
   }
 
-  const paidByClientId = sanitizeClientId(message.paidByClientId || '');
-  if (!paidByClientId) {
-    return { ok: false, error: 'payer is required' };
-  }
-
-  const payer = clients.get(paidByClientId);
-  if (!payer || !payer.username) {
-    return { ok: false, error: 'payer must be a named participant' };
+  const paidByName = normalizeName(message.paidByName || '');
+  if (!paidByName) {
+    return { ok: false, error: 'payer name is required' };
   }
 
   if (!Array.isArray(message.splits) || message.splits.length === 0) {
@@ -259,20 +250,15 @@ function validateExpenseInput(message, self) {
   const splits = [];
 
   for (const rawSplit of message.splits) {
-    const participantClientId = sanitizeClientId(rawSplit?.participantClientId || '');
+    const participantName = normalizeName(rawSplit?.participantName || '');
     const weight = Number(rawSplit?.weight);
 
-    if (!participantClientId) {
-      return { ok: false, error: 'split participant is invalid' };
+    if (!participantName) {
+      return { ok: false, error: 'split participant name is invalid' };
     }
 
-    if (dedup.has(participantClientId)) {
+    if (dedup.has(participantName)) {
       return { ok: false, error: 'split participants must be unique' };
-    }
-
-    const participant = clients.get(participantClientId);
-    if (!participant || !participant.username) {
-      return { ok: false, error: 'all split participants must be named participants' };
     }
 
     if (!Number.isFinite(weight) || weight <= 0) {
@@ -284,8 +270,8 @@ function validateExpenseInput(message, self) {
       return { ok: false, error: 'all split weights must be positive' };
     }
 
-    dedup.add(participantClientId);
-    splits.push({ participantClientId, weight: roundedWeight });
+    dedup.add(participantName);
+    splits.push({ participantName, weight: roundedWeight });
   }
 
   if (splits.length === 0) {
@@ -296,55 +282,54 @@ function validateExpenseInput(message, self) {
     ok: true,
     description,
     amountCents,
-    paidByClientId,
+    paidByName,
     splits
   };
 }
 
 function computeLedger() {
-  const participants = getParticipants();
-  const balanceMap = new Map(participants.map((p) => [p.clientId, 0]));
+  // Collect all unique names that appear in expenses
+  const nameSet = new Set();
+  for (const expense of expenses) {
+    nameSet.add(expense.paidByName);
+    for (const split of expense.splits) {
+      nameSet.add(split.participantName);
+    }
+  }
+
+  const balanceMap = new Map();
+  for (const name of nameSet) {
+    balanceMap.set(name, 0);
+  }
 
   const normalizedExpenses = expenses.map((expense) => {
     const allocations = allocateByWeights(expense.amountCents, expense.splits);
 
-    if (!balanceMap.has(expense.paidByClientId)) {
-      return null;
-    }
-
-    balanceMap.set(expense.paidByClientId, balanceMap.get(expense.paidByClientId) + expense.amountCents);
+    balanceMap.set(expense.paidByName, (balanceMap.get(expense.paidByName) || 0) + expense.amountCents);
 
     for (const split of allocations) {
-      if (!balanceMap.has(split.participantClientId)) {
-        continue;
-      }
-
-      balanceMap.set(split.participantClientId, balanceMap.get(split.participantClientId) - split.shareCents);
+      balanceMap.set(split.participantName, (balanceMap.get(split.participantName) || 0) - split.shareCents);
     }
 
     return {
       id: expense.id,
       description: expense.description,
       amountCents: expense.amountCents,
-      paidByClientId: expense.paidByClientId,
+      paidByName: expense.paidByName,
       createdAtMs: expense.createdAtMs,
-      createdByClientId: expense.createdByClientId,
       splits: allocations
     };
-  }).filter(Boolean);
+  });
 
-  const balances = participants
-    .map((participant) => ({
-      participantClientId: participant.clientId,
-      username: participant.username,
-      netCents: balanceMap.get(participant.clientId) || 0
-    }))
-    .sort((a, b) => a.username.localeCompare(b.username));
+  const balances = Array.from(balanceMap.entries())
+    .map(([name, netCents]) => ({ name, netCents }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const settlements = computeSettlements(balances);
+  const knownNames = Array.from(nameSet).sort();
 
   return {
-    participants,
+    knownNames,
     balances,
     settlements,
     expenses: normalizedExpenses
@@ -355,7 +340,7 @@ function allocateByWeights(amountCents, splits) {
   const totalWeight = splits.reduce((sum, split) => sum + split.weight, 0);
   if (totalWeight <= 0) {
     return splits.map((split) => ({
-      participantClientId: split.participantClientId,
+      participantName: split.participantName,
       weight: split.weight,
       shareCents: 0
     }));
@@ -366,7 +351,7 @@ function allocateByWeights(amountCents, splits) {
     const baseShare = Math.floor(exactShare);
     return {
       index,
-      participantClientId: split.participantClientId,
+      participantName: split.participantName,
       weight: split.weight,
       baseShare,
       remainder: exactShare - baseShare
@@ -381,7 +366,7 @@ function allocateByWeights(amountCents, splits) {
       return b.remainder - a.remainder;
     }
 
-    return a.participantClientId.localeCompare(b.participantClientId);
+    return a.participantName.localeCompare(b.participantName);
   });
 
   let cursor = 0;
@@ -394,7 +379,7 @@ function allocateByWeights(amountCents, splits) {
   provisional.sort((a, b) => a.index - b.index);
 
   return provisional.map((row) => ({
-    participantClientId: row.participantClientId,
+    participantName: row.participantName,
     weight: row.weight,
     shareCents: row.baseShare
   }));
@@ -403,21 +388,13 @@ function allocateByWeights(amountCents, splits) {
 function computeSettlements(balances) {
   const creditors = balances
     .filter((balance) => balance.netCents > 0)
-    .map((balance) => ({
-      participantClientId: balance.participantClientId,
-      username: balance.username,
-      amountCents: balance.netCents
-    }))
-    .sort((a, b) => b.amountCents - a.amountCents || a.username.localeCompare(b.username));
+    .map((balance) => ({ name: balance.name, amountCents: balance.netCents }))
+    .sort((a, b) => b.amountCents - a.amountCents || a.name.localeCompare(b.name));
 
   const debtors = balances
     .filter((balance) => balance.netCents < 0)
-    .map((balance) => ({
-      participantClientId: balance.participantClientId,
-      username: balance.username,
-      amountCents: Math.abs(balance.netCents)
-    }))
-    .sort((a, b) => b.amountCents - a.amountCents || a.username.localeCompare(b.username));
+    .map((balance) => ({ name: balance.name, amountCents: Math.abs(balance.netCents) }))
+    .sort((a, b) => b.amountCents - a.amountCents || a.name.localeCompare(b.name));
 
   const transfers = [];
   let creditorIndex = 0;
@@ -430,10 +407,8 @@ function computeSettlements(balances) {
 
     if (amountCents > 0) {
       transfers.push({
-        fromClientId: debtor.participantClientId,
-        fromUsername: debtor.username,
-        toClientId: creditor.participantClientId,
-        toUsername: creditor.username,
+        fromName: debtor.name,
+        toName: creditor.name,
         amountCents
       });
     }
@@ -470,7 +445,7 @@ function buildSnapshot(forClientId) {
 
   return {
     serverNowMs: Date.now(),
-    participants: ledger.participants,
+    knownNames: ledger.knownNames,
     expenses: ledger.expenses,
     balances: ledger.balances,
     settlements: ledger.settlements,
@@ -697,6 +672,15 @@ function sanitizeClientId(value) {
 function normalizeUsername(value) {
   const normalized = String(value || '').trim().replace(/\s+/g, ' ');
   if (normalized.length < 2 || normalized.length > 24) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeName(value) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (normalized.length < 1 || normalized.length > 24) {
     return null;
   }
 

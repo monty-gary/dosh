@@ -5,14 +5,8 @@ export interface ClientState {
   lastSeenAtMs: number;
 }
 
-export interface Participant {
-  clientId: string;
-  username: string;
-  connected: boolean;
-}
-
 export interface ExpenseSplit {
-  participantClientId: string;
+  participantName: string;
   weight: number;
   shareCents: number;
 }
@@ -21,29 +15,25 @@ export interface Expense {
   id: string;
   description: string;
   amountCents: number;
-  paidByClientId: string;
-  createdByClientId: string;
+  paidByName: string;
   createdAtMs: number;
   splits: ExpenseSplit[];
 }
 
 export interface Balance {
-  participantClientId: string;
-  username: string;
+  name: string;
   netCents: number;
 }
 
 export interface SettlementTransfer {
-  fromClientId: string;
-  fromUsername: string;
-  toClientId: string;
-  toUsername: string;
+  fromName: string;
+  toName: string;
   amountCents: number;
 }
 
 export interface Snapshot {
   serverNowMs: number;
-  participants: Participant[];
+  knownNames: string[];
   expenses: Expense[];
   balances: Balance[];
   settlements: SettlementTransfer[];
@@ -79,9 +69,9 @@ export type ClientMessage =
       type: 'add_expense';
       description: string;
       amount: number;
-      paidByClientId: string;
+      paidByName: string;
       splits: Array<{
-        participantClientId: string;
+        participantName: string;
         weight: number;
       }>;
     }
