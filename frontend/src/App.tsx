@@ -515,8 +515,7 @@ function App() {
       <div className="app-shell">
         <section className="card gate-card">
           <h1>dosh</h1>
-          <p>Shared tab splitting, live for everyone in the room.</p>
-          <p className="hint">Use your tab password.</p>
+          <p>Shared tab splitting</p>
 
           <form className="form-stack" onSubmit={onSubmitPassword}>
             <div>
