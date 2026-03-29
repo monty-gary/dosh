@@ -343,24 +343,24 @@ strong.pos {
 
 .expense-item {
   display: grid;
+  gap: 0.4rem;
+}
+
+.expense-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
   gap: 0.5rem;
 }
 
 .expense-title {
-  display: block;
-  width: 100%;
-}
-
-.expense-body {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.65rem;
-  align-items: end;
+  flex: 1;
 }
 
 .expense-meta {
-  display: grid;
-  gap: 0.18rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
 }
 
 .expense-meta span {
@@ -373,16 +373,9 @@ strong.pos {
   white-space: nowrap;
 }
 
-.expense-right {
-  display: grid;
-  gap: 0.4rem;
-  justify-items: end;
-  align-items: end;
-}
-
 .split-readout {
-  display: grid;
-  justify-items: end;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
 }
 

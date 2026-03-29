@@ -688,22 +688,20 @@ function App() {
               <ul className="expense-list">
                 {[...regularExpenses].reverse().map((expense) => (
                   <li key={expense.id} className="expense-item">
-                    <strong className="expense-title">{expense.description}</strong>
-                    <div className="expense-body">
-                      <div className="expense-meta">
-                        <span>{expense.paidByName} paid</span>
-                        <span className="expense-amount">{formatMoney(expense.amountCents, tabCurrency)}</span>
-                      </div>
-                      <div className="expense-right">
-                        <div className="split-readout">
-                          {expense.splits.map((split) => (
-                            <span key={`${expense.id}-${split.participantName}`}>
-                              {split.participantName} × {split.weight}
-                            </span>
-                          ))}
-                        </div>
-                        <button type="button" className="danger-icon" onClick={() => onRemoveExpense(expense.id)}>−</button>
-                      </div>
+                    <div className="expense-header">
+                      <strong className="expense-title">{expense.description}</strong>
+                      <button type="button" className="danger-icon" onClick={() => onRemoveExpense(expense.id)}>−</button>
+                    </div>
+                    <div className="expense-meta">
+                      <span>{expense.paidByName} paid</span>
+                      <span className="expense-amount">{formatMoney(expense.amountCents, tabCurrency)}</span>
+                    </div>
+                    <div className="split-readout">
+                      {expense.splits.map((split) => (
+                        <span key={`${expense.id}-${split.participantName}`}>
+                          {split.participantName} × {split.weight}
+                        </span>
+                      ))}
                     </div>
                   </li>
                 ))}
@@ -712,13 +710,11 @@ function App() {
                   const paymentLabel = getPaymentLabel(payment.description);
                   return (
                     <li key={payment.id} className="payment-item">
-                      <div>
+                      <div className="expense-header">
                         <strong>{paymentLabel ? `Payment (${paymentLabel})` : 'Payment'}</strong>
-                        <p>{payment.paidByName} paid {payee} {formatMoney(payment.amountCents, tabCurrency)}</p>
-                      </div>
-                      <div className="expense-right">
                         <button type="button" className="danger-icon" onClick={() => onRemoveExpense(payment.id)}>−</button>
                       </div>
+                      <p>{payment.paidByName} paid {payee} {formatMoney(payment.amountCents, tabCurrency)}</p>
                     </li>
                   );
                 })}
