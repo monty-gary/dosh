@@ -913,8 +913,8 @@ function App() {
                 </div>
 
                 <div className="inline-grid">
-                  <button type="submit" disabled={isOffline || people.length < 2}>Add custom payment</button>
-                  <button type="button" className="ghost" onClick={() => setShowPaymentModal(false)}>Close</button>
+                  <button type="submit" disabled={isOffline || people.length < 2}>Add Payment</button>
+                  <button type="button" className="ghost" onClick={() => setShowPaymentModal(false)}>Cancel</button>
                 </div>
               </form>
             </div>
