@@ -188,7 +188,7 @@ button.ghost {
 
 .main-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 0.9rem;
 }
 
@@ -201,8 +201,12 @@ button.ghost {
   gap: 0.75rem;
 }
 
+.action-panel {
+  padding: 0.8rem;
+}
+
 .form-panel {
-  grid-row: span 2;
+  grid-row: auto;
 }
 
 .inline-grid {
@@ -324,12 +328,21 @@ strong.pos {
 
 .expense-list li {
   display: grid;
-  gap: 0.45rem;
+  grid-template-columns: 1fr auto;
+  gap: 0.65rem;
+  align-items: start;
+}
+
+.expense-right {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: end;
 }
 
 .split-readout {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 0.35rem;
 }
 
@@ -339,6 +352,49 @@ strong.pos {
   padding: 0.25rem 0.52rem;
   font-size: 0.84rem;
   color: #ffe6c4;
+}
+
+.danger-icon {
+  background: rgba(126, 27, 27, 0.88);
+  color: #ffd8d8;
+  border: 1px solid rgba(255, 155, 155, 0.45);
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.danger-icon:hover {
+  background: rgba(166, 31, 31, 0.95);
+}
+
+.api-line {
+  border-top: 1px solid rgba(255, 198, 124, 0.16);
+  padding-top: 0.7rem;
+  font-size: 0.9rem;
+  color: #ffdcb7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 2, 1, 0.65);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 1rem;
+}
+
+.modal {
+  width: min(680px, 100%);
+  padding: 1rem;
 }
 
 .footer-note {

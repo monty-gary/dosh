@@ -85,5 +85,9 @@ export type ClientMessage =
       }>;
     }
   | {
+      type: 'remove_expense';
+      id: string;
+    }
+  | {
       type: 'ping';
     };

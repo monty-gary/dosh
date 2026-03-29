@@ -209,6 +209,25 @@ wss.on('connection', (ws, clientId) => {
       return;
     }
 
+    if (message.type === 'remove_expense') {
+      const id = String(message.id || '').trim();
+      if (!id) {
+        sendError(ws, 'expense id is required');
+        return;
+      }
+
+      const index = expenses.findIndex((expense) => expense.id === id);
+      if (index === -1) {
+        sendError(ws, 'expense not found');
+        return;
+      }
+
+      expenses.splice(index, 1);
+      client.lastSeenAtMs = Date.now();
+      broadcastState();
+      return;
+    }
+
     if (message.type === 'ping') {
       safeSend(ws, {
         type: 'pong',
