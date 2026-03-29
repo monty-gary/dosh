@@ -16,6 +16,7 @@ const TOKEN_TTL_MS = Number.isFinite(rawTokenTtlMs) && rawTokenTtlMs > 0 ? rawTo
 const clients = new Map();
 const socketByClientId = new Map();
 const expenses = [];
+const people = new Set();
 
 const server = http.createServer(async (req, res) => {
   if (applyCors(req, res)) {
@@ -37,7 +38,7 @@ const server = http.createServer(async (req, res) => {
   if (method === 'GET' && url.pathname === '/health') {
     writeJson(res, 200, {
       ok: true,
-      participants: getParticipants().length,
+      people: people.size,
       expenses: expenses.length
     });
     return;
@@ -160,6 +161,32 @@ wss.on('connection', (ws, clientId) => {
       return;
     }
 
+    if (message.type === 'add_person') {
+      const name = normalizeName(message.name || '');
+      if (!name) {
+        sendError(ws, 'person name must be 1-24 characters');
+        return;
+      }
+
+      people.add(name);
+      client.lastSeenAtMs = Date.now();
+      broadcastState();
+      return;
+    }
+
+    if (message.type === 'remove_person') {
+      const name = normalizeName(message.name || '');
+      if (!name) {
+        sendError(ws, 'person name is invalid');
+        return;
+      }
+
+      people.delete(name);
+      client.lastSeenAtMs = Date.now();
+      broadcastState();
+      return;
+    }
+
     if (message.type === 'add_expense') {
       const validation = validateExpenseInput(message);
       if (!validation.ok) {
@@ -242,6 +269,10 @@ function validateExpenseInput(message) {
     return { ok: false, error: 'payer name is required' };
   }
 
+  if (!people.has(paidByName)) {
+    return { ok: false, error: 'payer must be selected from people list' };
+  }
+
   if (!Array.isArray(message.splits) || message.splits.length === 0) {
     return { ok: false, error: 'select at least one participant in "for whom"' };
   }
@@ -259,6 +290,10 @@ function validateExpenseInput(message) {
 
     if (dedup.has(participantName)) {
       return { ok: false, error: 'split participants must be unique' };
+    }
+
+    if (!people.has(participantName)) {
+      return { ok: false, error: 'all split participants must come from people list' };
     }
 
     if (!Number.isFinite(weight) || weight <= 0) {
@@ -288,8 +323,8 @@ function validateExpenseInput(message) {
 }
 
 function computeLedger() {
-  // Collect all unique names that appear in expenses
-  const nameSet = new Set();
+  // Collect all unique names from people management and expenses
+  const nameSet = new Set(people);
   for (const expense of expenses) {
     nameSet.add(expense.paidByName);
     for (const split of expense.splits) {
@@ -329,6 +364,7 @@ function computeLedger() {
   const knownNames = Array.from(nameSet).sort();
 
   return {
+    people: Array.from(people).sort(),
     knownNames,
     balances,
     settlements,
@@ -445,6 +481,7 @@ function buildSnapshot(forClientId) {
 
   return {
     serverNowMs: Date.now(),
+    people: ledger.people,
     knownNames: ledger.knownNames,
     expenses: ledger.expenses,
     balances: ledger.balances,

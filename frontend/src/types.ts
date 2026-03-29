@@ -33,6 +33,7 @@ export interface SettlementTransfer {
 
 export interface Snapshot {
   serverNowMs: number;
+  people: string[];
   knownNames: string[];
   expenses: Expense[];
   balances: Balance[];
@@ -64,6 +65,14 @@ export type ClientMessage =
   | {
       type: 'set_username';
       username: string;
+    }
+  | {
+      type: 'add_person';
+      name: string;
+    }
+  | {
+      type: 'remove_person';
+      name: string;
     }
   | {
       type: 'add_expense';

@@ -13,7 +13,7 @@ type AuthPhase = 'checking' | 'required' | 'ready';
 type ConnectionState = 'offline' | 'connecting' | 'online';
 
 interface SplitRow {
-  name: string;
+  participantName: string;
   weight: string;
 }
 
@@ -31,7 +31,8 @@ function App() {
   const [descriptionInput, setDescriptionInput] = useState('');
   const [amountInput, setAmountInput] = useState('');
   const [paidByName, setPaidByName] = useState('');
-  const [splitRows, setSplitRows] = useState<SplitRow[]>([{ name: '', weight: '1' }]);
+  const [splitRows, setSplitRows] = useState<SplitRow[]>([{ participantName: '', weight: '1' }]);
+  const [newPersonInput, setNewPersonInput] = useState('');
 
   const [isWorking, setIsWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -153,7 +154,23 @@ function App() {
     };
   }, [authPhase, authToken, clientId, sendWsMessage]);
 
-  const knownNames = snapshot?.knownNames || [];
+  const people = snapshot?.people || [];
+
+  useEffect(() => {
+    if (!people.length) {
+      setPaidByName('');
+      setSplitRows([{ participantName: '', weight: '1' }]);
+      return;
+    }
+
+    setPaidByName((current) => (current && people.includes(current) ? current : people[0]));
+    setSplitRows((rows) =>
+      rows.map((row) => ({
+        ...row,
+        participantName: row.participantName && people.includes(row.participantName) ? row.participantName : people[0]
+      }))
+    );
+  }, [people]);
 
   const onSubmitPassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -172,12 +189,31 @@ function App() {
     }
   };
 
+  const onAddPerson = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setErrorMessage(null);
+
+    const name = normalizeText(newPersonInput);
+    if (name.length < 1 || name.length > 24) {
+      setErrorMessage('Person name must be 1-24 characters.');
+      return;
+    }
+
+    sendWsMessage({ type: 'add_person', name });
+    setNewPersonInput('');
+  };
+
+  const onRemovePerson = (name: string) => {
+    setErrorMessage(null);
+    sendWsMessage({ type: 'remove_person', name });
+  };
+
   const onUpdateSplitRow = (index: number, field: keyof SplitRow, value: string) => {
     setSplitRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   };
 
   const onAddSplitRow = () => {
-    setSplitRows((rows) => [...rows, { name: '', weight: '1' }]);
+    setSplitRows((rows) => [...rows, { participantName: people[0] || '', weight: '1' }]);
   };
 
   const onRemoveSplitRow = (index: number) => {
@@ -187,6 +223,11 @@ function App() {
   const onSubmitExpense = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setErrorMessage(null);
+
+    if (people.length === 0) {
+      setErrorMessage('Add people first.');
+      return;
+    }
 
     const description = normalizeText(descriptionInput);
     if (description.length < 2 || description.length > 80) {
@@ -200,14 +241,13 @@ function App() {
       return;
     }
 
-    const payer = normalizeText(paidByName);
-    if (payer.length < 1 || payer.length > 24) {
-      setErrorMessage('Payer name is required (max 24 chars).');
+    if (!paidByName || !people.includes(paidByName)) {
+      setErrorMessage('Choose who paid.');
       return;
     }
 
     const splits = splitRows
-      .map((row) => ({ participantName: normalizeText(row.name), weight: Number(row.weight) }))
+      .map((row) => ({ participantName: row.participantName, weight: Number(row.weight) }))
       .filter((s) => s.participantName.length > 0);
 
     if (splits.length === 0) {
@@ -215,8 +255,8 @@ function App() {
       return;
     }
 
-    if (splits.some((s) => s.participantName.length > 24)) {
-      setErrorMessage('Each participant name must be max 24 chars.');
+    if (splits.some((s) => !people.includes(s.participantName))) {
+      setErrorMessage('Each split participant must be selected from people list.');
       return;
     }
 
@@ -229,13 +269,13 @@ function App() {
       type: 'add_expense',
       description,
       amount,
-      paidByName: payer,
+      paidByName,
       splits
     });
 
     setDescriptionInput('');
     setAmountInput('');
-    setSplitRows([{ name: '', weight: '1' }]);
+    setSplitRows([{ participantName: people[0] || '', weight: '1' }]);
   };
 
   if (authPhase === 'required' || authPhase === 'checking') {
@@ -302,13 +342,38 @@ function App() {
 
         {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
 
-        <datalist id="known-names">
-          {knownNames.map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
-
         <div className="main-grid">
+          <section className="panel">
+            <h2>People</h2>
+            <form className="form-stack" onSubmit={onAddPerson}>
+              <div className="inline-grid">
+                <input
+                  type="text"
+                  placeholder="Add person name…"
+                  maxLength={24}
+                  value={newPersonInput}
+                  onChange={(event) => setNewPersonInput(event.target.value)}
+                />
+                <button type="submit">Add person</button>
+              </div>
+            </form>
+
+            {people.length ? (
+              <ul className="metric-list">
+                {people.map((name) => (
+                  <li key={name}>
+                    <span>{name}</span>
+                    <button type="button" className="ghost remove-btn" onClick={() => onRemovePerson(name)}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hint">No people yet.</p>
+            )}
+          </section>
+
           <section className="panel form-panel">
             <h2>Add expense</h2>
             <form className="form-stack" onSubmit={onSubmitExpense}>
@@ -341,15 +406,18 @@ function App() {
 
                 <div>
                   <label htmlFor="payer">Who paid</label>
-                  <input
+                  <select
                     id="payer"
-                    type="text"
-                    list="known-names"
-                    placeholder="Name…"
-                    maxLength={24}
                     value={paidByName}
                     onChange={(event) => setPaidByName(event.target.value)}
-                  />
+                    disabled={people.length === 0}
+                  >
+                    {people.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -358,14 +426,17 @@ function App() {
                 <div className="split-rows">
                   {splitRows.map((row, index) => (
                     <div className="split-row-input" key={index}>
-                      <input
-                        type="text"
-                        list="known-names"
-                        placeholder="Name…"
-                        maxLength={24}
-                        value={row.name}
-                        onChange={(event) => onUpdateSplitRow(index, 'name', event.target.value)}
-                      />
+                      <select
+                        value={row.participantName}
+                        onChange={(event) => onUpdateSplitRow(index, 'participantName', event.target.value)}
+                        disabled={people.length === 0}
+                      >
+                        {people.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
                       <input
                         type="number"
                         min="0"
@@ -382,13 +453,13 @@ function App() {
                       ) : null}
                     </div>
                   ))}
-                  <button type="button" className="ghost" onClick={onAddSplitRow}>
+                  <button type="button" className="ghost" onClick={onAddSplitRow} disabled={people.length === 0}>
                     + Add person
                   </button>
                 </div>
               </div>
 
-              <button type="submit">Add expense</button>
+              <button type="submit" disabled={people.length === 0}>Add expense</button>
             </form>
           </section>
 
