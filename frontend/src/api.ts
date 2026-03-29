@@ -1,8 +1,7 @@
 import type { SessionResponse } from './types';
 
-// For GitHub Pages production builds, point this at your deployed Render backend URL.
-// Example: https://dosh-backend.onrender.com
-const PRODUCTION_FALLBACK_API = 'https://your-render-backend.onrender.com';
+// GitHub Pages production fallback.
+const PRODUCTION_FALLBACK_API = 'https://dosh-backend.onrender.com';
 
 export const API_BASE_URL = resolveApiBaseUrl();
 export const WS_URL = toWebSocketUrl(API_BASE_URL);
