@@ -890,7 +890,7 @@ function App() {
                       value={paymentFromName}
                       onChange={(event) => setPaymentFromName(event.target.value)}
                     >
-                      {people.map((name) => (
+                      {people.filter((name) => name !== paymentToName).map((name) => (
                         <option key={name} value={name}>{name}</option>
                       ))}
                     </select>
@@ -904,7 +904,7 @@ function App() {
                     value={paymentToName}
                     onChange={(event) => setPaymentToName(event.target.value)}
                   >
-                    {people.map((name) => (
+                    {people.filter((name) => name !== paymentFromName).map((name) => (
                       <option key={name} value={name}>{name}</option>
                     ))}
                   </select>
