@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 
 const DEFAULT_PASSWORD = 'money';
@@ -9,9 +9,11 @@ const OPEN_STATE = 1;
 const port = Number(process.env.PORT || DEFAULT_PORT);
 const universalPassword = process.env.DOSH_PASSWORD || DEFAULT_PASSWORD;
 const corsOrigin = process.env.CORS_ORIGIN || '*';
+const TOKEN_SECRET = process.env.DOSH_TOKEN_SECRET || 'dosh-demo-token-secret';
+const rawTokenTtlMs = Number(process.env.DOSH_TOKEN_TTL_MS ?? '0');
+const TOKEN_TTL_MS = Number.isFinite(rawTokenTtlMs) && rawTokenTtlMs > 0 ? rawTokenTtlMs : 0;
 
 const clients = new Map();
-const authTokens = new Map();
 const socketByClientId = new Map();
 const expenses = [];
 
@@ -60,13 +62,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const session = getOrCreateClient(clientId);
-    const token = randomUUID();
-
-    authTokens.set(token, {
-      token,
-      clientId,
-      createdAtMs: Date.now()
-    });
+    const token = createSessionToken(clientId);
 
     writeJson(res, 200, {
       ok: true,
@@ -533,17 +529,87 @@ function serializeClient(client) {
   };
 }
 
+function createSessionToken(clientId) {
+  const sanitized = sanitizeClientId(clientId);
+  if (!sanitized) {
+    throw new Error('invalid client id');
+  }
+
+  const payload = {
+    clientId: sanitized,
+    createdAtMs: Date.now()
+  };
+
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = createSignature(encoded);
+
+  return `${encoded}.${signature}`;
+}
+
+function createSignature(encodedPayload) {
+  return createHmac('sha256', TOKEN_SECRET).update(encodedPayload).digest('base64url');
+}
+
 function isTokenValidForClient(token, clientId) {
-  if (!token || !clientId) {
+  if (!token) {
     return false;
   }
 
-  const record = authTokens.get(token);
-  if (!record) {
+  const sanitizedClientId = sanitizeClientId(clientId);
+  if (!sanitizedClientId) {
     return false;
   }
 
-  return record.clientId === clientId;
+  const [encodedPayload, signature] = token.split('.');
+  if (!encodedPayload || !signature) {
+    return false;
+  }
+
+  let expectedSignature;
+  try {
+    expectedSignature = createSignature(encodedPayload);
+  } catch (error) {
+    return false;
+  }
+
+  let signatureBuffer;
+  let expectedBuffer;
+  try {
+    signatureBuffer = Buffer.from(signature, 'base64url');
+    expectedBuffer = Buffer.from(expectedSignature, 'base64url');
+  } catch (error) {
+    return false;
+  }
+
+  if (signatureBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  if (!timingSafeEqual(signatureBuffer, expectedBuffer)) {
+    return false;
+  }
+
+  let payload;
+  try {
+    const decoded = Buffer.from(encodedPayload, 'base64url').toString('utf8');
+    payload = JSON.parse(decoded);
+  } catch (error) {
+    return false;
+  }
+
+  if (payload.clientId !== sanitizedClientId) {
+    return false;
+  }
+
+  if (typeof payload.createdAtMs !== 'number') {
+    return false;
+  }
+
+  if (TOKEN_TTL_MS > 0 && payload.createdAtMs + TOKEN_TTL_MS < Date.now()) {
+    return false;
+  }
+
+  return true;
 }
 
 function parseWsMessage(raw) {

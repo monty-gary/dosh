@@ -38,6 +38,8 @@ Backend supports:
 - `PORT` (default `3000`)
 - `DOSH_PASSWORD` (default `money`)
 - `CORS_ORIGIN` (default `*`)
+- `DOSH_TOKEN_SECRET` (default `dosh-demo-token-secret`) – secret key for signing session tokens across instances.
+- `DOSH_TOKEN_TTL_MS` (default `0`, meaning no expiration) – optional TTL in milliseconds for issued tokens.
 
 Frontend supports:
 - `VITE_API_BASE_URL` (optional; defaults to `http://localhost:3000` on localhost)
