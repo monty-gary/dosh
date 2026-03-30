@@ -969,14 +969,20 @@ function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function sanitizeDecimalInput(value: string): string {
+function sanitizeDecimalInput(value: string, maxFractionDigits = 2): string {
   const normalized = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
   const firstDotIndex = normalized.indexOf('.');
   if (firstDotIndex === -1) {
     return normalized;
   }
 
-  return normalized.slice(0, firstDotIndex + 1) + normalized.slice(firstDotIndex + 1).replace(/\./g, '');
+  const integerPart = normalized.slice(0, firstDotIndex + 1);
+  const fractionPart = normalized
+    .slice(firstDotIndex + 1)
+    .replace(/\./g, '')
+    .slice(0, Math.max(0, maxFractionDigits));
+
+  return `${integerPart}${fractionPart}`;
 }
 
 function formatMoney(cents: number, currency: string): string {
