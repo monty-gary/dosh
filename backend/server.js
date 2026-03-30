@@ -352,7 +352,7 @@ wss.on('connection', (ws, session) => {
         return;
       }
 
-      tab.people.add(name);
+      tab.people.add(resolveCanonicalPersonName(tab, name));
       client.lastSeenAtMs = Date.now();
       await persistState();
       broadcastState(session.tabId);
@@ -366,7 +366,10 @@ wss.on('connection', (ws, session) => {
         return;
       }
 
-      tab.people.delete(name);
+      const canonicalName = resolveNameInCollection(tab.people, name);
+      if (canonicalName) {
+        tab.people.delete(canonicalName);
+      }
       client.lastSeenAtMs = Date.now();
       await persistState();
       broadcastState(session.tabId);
@@ -645,10 +648,12 @@ function validateExpenseInput(message, tab) {
     return { ok: false, error: 'amount is invalid' };
   }
 
-  const paidByName = normalizeName(message.paidByName || '');
-  if (!paidByName) {
+  const paidByNameRaw = normalizeName(message.paidByName || '');
+  if (!paidByNameRaw) {
     return { ok: false, error: 'payer name is required' };
   }
+
+  const paidByName = resolveNameInCollection(tab.people, paidByNameRaw);
 
   if (!tab.people.has(paidByName)) {
     return { ok: false, error: 'payer must be selected from people list' };
@@ -662,12 +667,14 @@ function validateExpenseInput(message, tab) {
   const splits = [];
 
   for (const rawSplit of message.splits) {
-    const participantName = normalizeName(rawSplit?.participantName || '');
+    const participantNameRaw = normalizeName(rawSplit?.participantName || '');
     const weight = Number(rawSplit?.weight);
 
-    if (!participantName) {
+    if (!participantNameRaw) {
       return { ok: false, error: 'split participant name is invalid' };
     }
+
+    const participantName = resolveNameInCollection(tab.people, participantNameRaw);
 
     if (dedup.has(participantName)) {
       return { ok: false, error: 'split participants must be unique' };
@@ -1129,6 +1136,53 @@ function normalizeName(value) {
   }
 
   return normalized;
+}
+
+function normalizeNameKey(value) {
+  return String(value || '').trim().toLocaleLowerCase();
+}
+
+function resolveNameInCollection(names, name) {
+  const normalizedName = normalizeName(name);
+  if (!normalizedName) {
+    return null;
+  }
+
+  const targetKey = normalizeNameKey(normalizedName);
+  for (const existingName of names) {
+    if (normalizeNameKey(existingName) === targetKey) {
+      return existingName;
+    }
+  }
+
+  return null;
+}
+
+function resolveCanonicalPersonName(tab, name) {
+  const normalizedName = normalizeName(name);
+  if (!normalizedName) {
+    return null;
+  }
+
+  const fromPeople = resolveNameInCollection(tab.people, normalizedName);
+  if (fromPeople) {
+    return fromPeople;
+  }
+
+  const targetKey = normalizeNameKey(normalizedName);
+  for (const expense of tab.expenses) {
+    if (normalizeNameKey(expense.paidByName) === targetKey) {
+      return expense.paidByName;
+    }
+
+    for (const split of expense.splits) {
+      if (normalizeNameKey(split.participantName) === targetKey) {
+        return split.participantName;
+      }
+    }
+  }
+
+  return normalizedName;
 }
 
 function normalizeTabName(value) {

@@ -288,6 +288,10 @@ function App() {
   };
 
   const onRemovePerson = (name: string) => {
+    if (!window.confirm(`Remove ${name}?`)) {
+      return;
+    }
+
     setErrorMessage(null);
     sendWsMessage({ type: 'remove_person', name });
   };
@@ -668,24 +672,6 @@ function App() {
           </section>
 
           <section className="panel">
-            <h2>Balances</h2>
-            {snapshot?.balances.length ? (
-              <ul className="metric-list">
-                {snapshot.balances.map((balance) => (
-                  <li key={balance.name}>
-                    <span>{balance.name}</span>
-                    <strong className={balance.netCents < 0 ? 'neg' : balance.netCents > 0 ? 'pos' : ''}>
-                      {formatSignedMoney(balance.netCents, tabCurrency)}
-                    </strong>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="hint">No expenses yet.</p>
-            )}
-          </section>
-
-          <section className="panel">
             <h2>Expenses</h2>
             {regularExpenses.length || paymentExpenses.length ? (
               <ul className="expense-list">
@@ -728,13 +714,18 @@ function App() {
           </section>
 
           <section className="panel">
-            <h2>People</h2>
-            {people.length ? (
+            <h2>Balance</h2>
+            {snapshot?.balances.length ? (
               <ul className="metric-list">
-                {people.map((name) => (
-                  <li key={name}>
-                    <span>{name}</span>
-                    <button type="button" className="danger-icon" disabled={isOffline} onClick={() => onRemovePerson(name)}>−</button>
+                {snapshot.balances.map((balance) => (
+                  <li key={balance.name}>
+                    <span>{balance.name}</span>
+                    <div className="topbar-right">
+                      <strong className={balance.netCents < 0 ? 'neg' : balance.netCents > 0 ? 'pos' : ''}>
+                        {formatSignedMoney(balance.netCents, tabCurrency)}
+                      </strong>
+                      <button type="button" className="danger-icon" disabled={isOffline} onClick={() => onRemovePerson(balance.name)}>−</button>
+                    </div>
                   </li>
                 ))}
               </ul>
