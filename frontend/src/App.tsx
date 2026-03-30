@@ -302,7 +302,8 @@ function App() {
   };
 
   const onUpdateSplitRow = (index: number, field: keyof SplitRow, value: string) => {
-    setSplitRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+    const nextValue = field === 'weight' ? sanitizeDecimalInput(value) : value;
+    setSplitRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: nextValue } : row)));
   };
 
   const onAddSplitRow = () => {
@@ -763,12 +764,11 @@ function App() {
                   <label htmlFor="amount">Amount</label>
                   <input
                     id="amount"
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
                     inputMode="decimal"
+                    pattern="[0-9]*[.]?[0-9]*"
                     value={amountInput}
-                    onChange={(event) => setAmountInput(event.target.value)}
+                    onChange={(event) => setAmountInput(sanitizeDecimalInput(event.target.value))}
                   />
                 </div>
                 <div>
@@ -801,10 +801,9 @@ function App() {
                         ))}
                       </select>
                       <input
-                        type="number"
-                        min="0"
-                        step="0.1"
+                        type="text"
                         inputMode="decimal"
+                        pattern="[0-9]*[.]?[0-9]*"
                         value={row.weight}
                         onChange={(event) => onUpdateSplitRow(index, 'weight', event.target.value)}
                       />
@@ -868,12 +867,11 @@ function App() {
                     <label htmlFor="paymentAmount">Amount</label>
                     <input
                       id="paymentAmount"
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
                       inputMode="decimal"
+                      pattern="[0-9]*[.]?[0-9]*"
                       value={paymentAmountInput}
-                      onChange={(event) => setPaymentAmountInput(event.target.value)}
+                      onChange={(event) => setPaymentAmountInput(sanitizeDecimalInput(event.target.value))}
                     />
                   </div>
                   <div>
@@ -969,6 +967,16 @@ function getOrCreateClientId(): string {
 
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
+}
+
+function sanitizeDecimalInput(value: string): string {
+  const normalized = value.replace(/,/g, '.').replace(/[^0-9.]/g, '');
+  const firstDotIndex = normalized.indexOf('.');
+  if (firstDotIndex === -1) {
+    return normalized;
+  }
+
+  return normalized.slice(0, firstDotIndex + 1) + normalized.slice(firstDotIndex + 1).replace(/\./g, '');
 }
 
 function formatMoney(cents: number, currency: string): string {
