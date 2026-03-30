@@ -35,6 +35,7 @@ function App() {
   const [paymentAmountInput, setPaymentAmountInput] = useState('');
   const [paymentFromName, setPaymentFromName] = useState('');
   const [paymentToName, setPaymentToName] = useState('');
+  const [paymentNoteInput, setPaymentNoteInput] = useState('');
 
   const [adminTabs, setAdminTabs] = useState<AdminTab[]>([]);
   const [newTabName, setNewTabName] = useState('');
@@ -400,12 +401,13 @@ function App() {
     setShowExpenseModal(false);
   };
 
-  const addPaymentExpense = (fromName: string, toName: string, amountCents: number) => {
+  const addPaymentExpense = (fromName: string, toName: string, amountCents: number, note = '') => {
     if (!fromName || !toName || fromName === toName || amountCents <= 0) {
       return;
     }
 
-    const description = `PAY:${fromName}->${toName}`;
+    const normalizedNote = normalizeText(note).slice(0, 76);
+    const description = normalizedNote ? `PAY:${normalizedNote}` : `PAY:${fromName}->${toName}`;
     sendWsMessage({
       type: 'add_expense',
       description,
@@ -440,8 +442,9 @@ function App() {
       return;
     }
 
-    addPaymentExpense(paymentFromName, paymentToName, Math.round(amount * 100));
+    addPaymentExpense(paymentFromName, paymentToName, Math.round(amount * 100), paymentNoteInput);
     setPaymentAmountInput('');
+    setPaymentNoteInput('');
   };
 
   const onSettled = () => {
@@ -861,7 +864,7 @@ function App() {
               </div>
 
               <form className="form-stack" onSubmit={onAddCustomPayment}>
-                <label>Custom payment</label>
+                <label>Custom Payment</label>
                 <div className="inline-grid">
                   <div>
                     <label htmlFor="paymentAmount">Amount</label>
@@ -899,6 +902,17 @@ function App() {
                       <option key={name} value={name}>{name}</option>
                     ))}
                   </select>
+                </div>
+
+                <div>
+                  <label htmlFor="paymentNote">Note (optional)</label>
+                  <input
+                    id="paymentNote"
+                    type="text"
+                    maxLength={76}
+                    value={paymentNoteInput}
+                    onChange={(event) => setPaymentNoteInput(event.target.value)}
+                  />
                 </div>
 
                 <div className="inline-grid">
