@@ -50,3 +50,18 @@ Frontend supports:
   - Set `VITE_API_BASE_URL` at build time, or
   - Update `PRODUCTION_FALLBACK_API` in `frontend/src/api.ts`.
 - Local development behavior is unchanged: `localhost` still uses `http://localhost:3000`.
+
+## Spreadsheet prototype
+A spreadsheet version lives at `spreadsheet/dosh-spreadsheet.ods`.
+
+It mirrors the app in a static spreadsheet form:
+- `People` sheet for participant names
+- `Expenses` sheet for expense rows, payer, and weighted split participants
+- `Balances` sheet for paid / owes / net totals
+- `Transfers` sheet for suggested debtor → creditor transfers
+
+Regenerate it with:
+
+```bash
+node tools/generate-ods.js
+```
