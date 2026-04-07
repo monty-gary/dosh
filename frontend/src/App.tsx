@@ -720,11 +720,11 @@ function App() {
         <div className="main-grid">
           <section className="panel action-panel">
             <div className="action-buttons">
-              <button type="button" disabled={isOffline} onClick={() => setShowExpenseModal(true)}>Add Expense</button>
-              <button type="button" disabled={isOffline} onClick={() => setShowPersonModal(true)}>Add Person</button>
+              <button type="button" disabled={isOffline} onClick={() => setShowExpenseModal(true)}>+ Expense</button>
+              <button type="button" disabled={isOffline} onClick={() => setShowPersonModal(true)}>+ Person</button>
             </div>
             <div className="action-buttons">
-              <button type="button" disabled={isOffline} onClick={() => setShowPaymentModal(true)}>Add Payment</button>
+              <button type="button" disabled={isOffline} onClick={() => setShowPaymentModal(true)}>+ Payment</button>
               <button type="button" disabled={isOffline || !settlements.length} onClick={onSettled}>Settled!</button>
             </div>
           </section>
@@ -821,7 +821,7 @@ function App() {
       {showExpenseModal ? (
         <div className="modal-backdrop" onClick={() => setShowExpenseModal(false)}>
           <div className="modal card" onClick={(event) => event.stopPropagation()}>
-            <h2>Add Expense</h2>
+            <h2>Expense</h2>
             <form className="form-stack" onSubmit={onSubmitExpense}>
               <div>
                 <label htmlFor="desc">Description</label>
@@ -889,7 +889,7 @@ function App() {
                   ))}
                 </div>
                 <button type="button" className="ghost" onClick={onAddSplitRow} disabled={!canAddSplitRow}>
-                  + Add person
+                  Add person
                 </button>
               </div>
 
@@ -905,11 +905,10 @@ function App() {
       {showPaymentModal ? (
         <div className="modal-backdrop" onClick={() => setShowPaymentModal(false)}>
           <div className="modal card" onClick={(event) => event.stopPropagation()}>
-            <h2>Add Payment</h2>
+            <h2>Payment</h2>
 
             <div className="form-stack">
               <div>
-                <label>From Settle Up</label>
                 {settlements.length ? (
                   <ul className="settlement-list">
                     {settlements.map((transfer, index) => (
@@ -1000,7 +999,7 @@ function App() {
       {showPersonModal ? (
         <div className="modal-backdrop" onClick={() => setShowPersonModal(false)}>
           <div className="modal card" onClick={(event) => event.stopPropagation()}>
-            <h2>Add Person</h2>
+            <h2>Person</h2>
             <form className="form-stack" onSubmit={onAddPerson}>
               <div>
                 <label htmlFor="personName">Name</label>

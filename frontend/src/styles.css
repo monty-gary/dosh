@@ -436,15 +436,22 @@ strong.pos {
   position: fixed;
   inset: 0;
   background: rgba(5, 2, 1, 0.65);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
   z-index: 100;
   padding: 1rem;
+  overflow-y: auto;
 }
 
 .modal {
   width: min(680px, 100%);
   padding: 1rem;
+  margin: auto;
+}
+
+.modal h2 {
+  text-align: center;
 }
 
 .footer-note {
