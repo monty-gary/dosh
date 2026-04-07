@@ -474,11 +474,15 @@ strong.pos {
 }
 
 /* Gate screen status line */
+.gate-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
 .status-line {
-  margin-top: 0.5rem;
-  font-size: 0.88rem;
+  font-size: 0.8rem;
   color: #a0a0b0;
-  text-align: center;
 }
 
 .status-line.ready {

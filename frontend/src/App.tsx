@@ -589,7 +589,14 @@ function App() {
     return (
       <div className="app-shell">
         <section className="card gate-card">
-          <h1>dosh</h1>
+          <div className="gate-title-row">
+            <h1>dosh</h1>
+            {backendStatus === 'starting' ? (
+              <span className="status-line pulsing">Starting backend…</span>
+            ) : backendStatus === 'ready' ? (
+              <span className="status-line ready">Ready</span>
+            ) : null}
+          </div>
 
           <form className="form-stack" onSubmit={onSubmitPassword}>
             <div>
@@ -610,11 +617,6 @@ function App() {
             </button>
           </form>
 
-          {backendStatus === 'starting' ? (
-            <p className="status-line pulsing">Starting backend…</p>
-          ) : backendStatus === 'ready' ? (
-            <p className="status-line ready">Ready</p>
-          ) : null}
           {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
         </section>
       </div>
