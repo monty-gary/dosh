@@ -42,12 +42,15 @@ export async function authenticate(
 }
 
 export async function pingBackend(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 4000);
   try {
-    const response = await safeFetch(`${API_BASE_URL}/api/session?token=ping&clientId=ping`);
-    // Any response (even 401/400) means the backend is up
-    return response.status < 500 || response.status >= 100;
+    const response = await fetch(`${API_BASE_URL}/`, { signal: controller.signal });
+    return response.ok || response.status < 500;
   } catch {
     return false;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 

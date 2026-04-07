@@ -45,7 +45,7 @@ function App() {
   const [isWorking, setIsWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // 'starting' = session restore in flight (backend may be waking), 'ready' = backend responded, null = not shown
-  const [backendStatus, setBackendStatus] = useState<'starting' | 'ready' | null>(authToken ? 'starting' : null);
+  const [backendStatus, setBackendStatus] = useState<'starting' | 'ready' | null>(null);
   const sessionRestoreAbortRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showPersonModal, setShowPersonModal] = useState(false);
@@ -81,6 +81,9 @@ function App() {
     setAdminTabs(tabs);
   }, [authToken]);
 
+  // Session restore: runs when authToken changes.
+  // On network failure, waits silently for backend to wake then retries.
+  // Never surfaces a "try again" message to the user.
   useEffect(() => {
     const guard = { cancelled: false };
     sessionRestoreAbortRef.current = guard;
@@ -88,91 +91,81 @@ function App() {
     if (!authToken) {
       setAuthPhase('required');
       setSnapshot(null);
-      setBackendStatus(null);
-      return () => {
-        guard.cancelled = true;
-      };
+      return () => { guard.cancelled = true; };
     }
 
     setAuthPhase('checking');
-    setBackendStatus('starting');
 
-    getSession(authToken, clientId)
-      .then(async (session) => {
+    const waitForBackend = (): Promise<void> =>
+      new Promise((resolve) => {
+        const poll = async () => {
+          if (guard.cancelled) { resolve(); return; }
+          const alive = await pingBackend();
+          if (guard.cancelled) { resolve(); return; }
+          if (alive) resolve();
+          else window.setTimeout(poll, 3000);
+        };
+        poll();
+      });
+
+    const attempt = async () => {
+      try {
+        const session = await getSession(authToken, clientId);
         if (guard.cancelled) return;
-
         const admin = Boolean(session.isAdmin);
         setIsAdmin(admin);
         setTabName(session.tabName || null);
-        if (!admin && session.tabCurrency) {
-          setTabCurrency(session.tabCurrency);
-        }
-        setBackendStatus(null);
+        if (!admin && session.tabCurrency) setTabCurrency(session.tabCurrency);
         setAuthPhase('ready');
-
-        if (admin) {
-          await refreshTabs();
-        }
-      })
-      .catch((error) => {
+        if (admin) await refreshTabs();
+      } catch (error) {
         if (guard.cancelled) return;
-
-        const isNetworkError = error instanceof ApiError && (error.code === 'network' || error.code === 'timeout');
-
-        if (isNetworkError) {
-          // Backend still waking — poll until it responds, then retry session
-          const pollInterval = window.setInterval(async () => {
-            if (guard.cancelled) {
-              window.clearInterval(pollInterval);
-              return;
-            }
-
-            const alive = await pingBackend();
-            if (!alive || guard.cancelled) return;
-
-            window.clearInterval(pollInterval);
-            if (guard.cancelled) return;
-
-            setBackendStatus('ready');
-
-            // After 2s, attempt silent session retry (unless user submitted password already)
-            window.setTimeout(async () => {
-              if (guard.cancelled) return;
-              try {
-                const session = await getSession(authToken, clientId);
-                if (guard.cancelled) return;
-                const admin = Boolean(session.isAdmin);
-                setIsAdmin(admin);
-                setTabName(session.tabName || null);
-                if (!admin && session.tabCurrency) setTabCurrency(session.tabCurrency);
-                setBackendStatus(null);
-                setAuthPhase('ready');
-                if (admin) await refreshTabs();
-              } catch {
-                if (guard.cancelled) return;
-                // Session truly expired — just clear and show clean form
-                clearAuth();
-                setBackendStatus(null);
-              }
-            }, 2000);
-          }, 3000);
-
-          guard.cancelled = false; // keep alive
-          return;
+        const isNetwork = error instanceof ApiError && (error.code === 'network' || error.code === 'timeout');
+        if (isNetwork) {
+          await waitForBackend();
+          if (!guard.cancelled) await attempt();
+        } else {
+          // Session expired — clear silently, show clean form
+          clearAuth();
         }
+      }
+    };
 
-        // Auth error — session expired, clear silently
-        clearAuth();
-        setBackendStatus(null);
-        setAuthToken(null);
-        localStorage.removeItem(STORAGE_AUTH_TOKEN);
-        setAuthPhase('required');
-      });
+    attempt();
+
+    return () => { guard.cancelled = true; };
+  }, [authToken, clientId, clearAuth, refreshTabs]);
+
+  // Backend readiness indicator: pings immediately on page load (and whenever
+  // auth phase resets to gate), shows pulsing "Starting backend…" then "Ready".
+  useEffect(() => {
+    if (authPhase === 'ready') {
+      setBackendStatus(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timerId: number | undefined;
+
+    const poll = async () => {
+      const alive = await pingBackend();
+      if (cancelled) return;
+      if (alive) {
+        setBackendStatus('ready');
+        timerId = window.setTimeout(() => { if (!cancelled) setBackendStatus(null); }, 2000);
+      } else {
+        setBackendStatus('starting');
+        timerId = window.setTimeout(poll, 3000);
+      }
+    };
+
+    poll();
 
     return () => {
-      guard.cancelled = true;
+      cancelled = true;
+      if (timerId !== undefined) window.clearTimeout(timerId);
     };
-  }, [authToken, clientId, clearAuth, refreshTabs]);
+  }, [authPhase]);
 
   useEffect(() => {
     if (authPhase !== 'ready' || !authToken || isAdmin) {
@@ -306,26 +299,44 @@ function App() {
     event.preventDefault();
     setErrorMessage(null);
     setIsWorking(true);
-
-    // Cancel any in-flight session restore so it doesn't interfere
     sessionRestoreAbortRef.current.cancelled = true;
 
-    try {
-      const result = await authenticate(passwordInput, clientId);
-      setAuthToken(result.token);
-      localStorage.setItem(STORAGE_AUTH_TOKEN, result.token);
-      setBackendStatus(null);
-      setAuthPhase('ready');
-      setIsAdmin(Boolean(result.session.isAdmin));
-      setTabName(result.session.tabName || null);
-      if (!result.session.isAdmin && result.session.tabCurrency) {
-        setTabCurrency(result.session.tabCurrency);
+    const password = passwordInput;
+
+    const waitForBackend = (): Promise<void> =>
+      new Promise((resolve) => {
+        const poll = async () => {
+          const alive = await pingBackend();
+          if (alive) resolve();
+          else window.setTimeout(poll, 3000);
+        };
+        poll();
+      });
+
+    const attempt = async (): Promise<void> => {
+      try {
+        const result = await authenticate(password, clientId);
+        setAuthToken(result.token);
+        localStorage.setItem(STORAGE_AUTH_TOKEN, result.token);
+        setAuthPhase('ready');
+        setIsAdmin(Boolean(result.session.isAdmin));
+        setTabName(result.session.tabName || null);
+        if (!result.session.isAdmin && result.session.tabCurrency) {
+          setTabCurrency(result.session.tabCurrency);
+        }
+      } catch (error) {
+        const isNetwork = error instanceof ApiError && (error.code === 'network' || error.code === 'timeout');
+        if (isNetwork) {
+          // Backend still waking — wait, then retry automatically. No user action needed.
+          await waitForBackend();
+          return attempt();
+        }
+        setErrorMessage(error instanceof Error ? error.message : 'Password check failed');
+        setIsWorking(false);
       }
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Password check failed');
-    } finally {
-      setIsWorking(false);
-    }
+    };
+
+    await attempt();
   };
 
   const onAddPerson = (event: FormEvent<HTMLFormElement>) => {
