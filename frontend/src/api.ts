@@ -2,6 +2,17 @@ import type { SessionResponse } from './types';
 
 // GitHub Pages production fallback.
 const PRODUCTION_FALLBACK_API = 'https://dosh-backend.onrender.com';
+const FETCH_TIMEOUT_MS = 15000;
+
+export class ApiError extends Error {
+  code: 'network' | 'timeout' | 'unknown';
+
+  constructor(message: string, code: 'network' | 'timeout' | 'unknown' = 'unknown') {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+  }
+}
 
 export const API_BASE_URL = resolveApiBaseUrl();
 export const WS_URL = toWebSocketUrl(API_BASE_URL);
@@ -116,9 +127,21 @@ function toWebSocketUrl(httpUrl: string): string {
 }
 
 async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   try {
-    return await fetch(input, init);
-  } catch {
-    throw new Error('Server is starting on Render, please wait ~30-60s and try again.');
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('Server is taking a while to wake up. Enter the password again or retry in ~30-60s.', 'timeout');
+    }
+
+    throw new ApiError('Server is starting on Render, please wait ~30-60s and try again.', 'network');
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }

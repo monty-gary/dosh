@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { API_BASE_URL, WS_URL, authenticate, createTab, deleteTab, getSession, listTabs, type AdminTab } from './api';
+import { API_BASE_URL, WS_URL, ApiError, authenticate, createTab, deleteTab, getSession, listTabs, type AdminTab } from './api';
 import type { ClientMessage, ServerMessage, Snapshot } from './types';
 
 const STORAGE_CLIENT_ID = 'dosh.clientId';
@@ -109,13 +109,18 @@ function App() {
           await refreshTabs();
         }
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) {
           return;
         }
 
         clearAuth();
-        setErrorMessage('Session expired. Enter the password again.');
+        if (error instanceof ApiError && (error.code === 'network' || error.code === 'timeout')) {
+          setErrorMessage(error.message);
+          return;
+        }
+
+        setErrorMessage('Saved session expired. Enter the password again.');
       });
 
     return () => {
@@ -536,15 +541,18 @@ function App() {
                 placeholder="•••••"
                 value={passwordInput}
                 onChange={(event) => setPasswordInput(event.target.value)}
-                disabled={isWorking || authPhase === 'checking'}
+                disabled={isWorking}
               />
             </div>
 
-            <button type="submit" disabled={isWorking || authPhase === 'checking' || passwordInput.length === 0}>
-              {authPhase === 'checking' ? 'Checking session…' : isWorking ? 'Checking…' : 'Enter'}
+            <button type="submit" disabled={isWorking || passwordInput.length === 0}>
+              {isWorking ? 'Checking…' : authPhase === 'checking' ? 'Use password instead' : 'Enter'}
             </button>
           </form>
 
+          {authPhase === 'checking' ? (
+            <p className="hint">Checking saved session… If the backend is waking up, this should resolve within ~15s. You can also enter the password now.</p>
+          ) : null}
           {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
         </section>
       </div>
