@@ -472,3 +472,24 @@ strong.pos {
     grid-template-columns: 1fr;
   }
 }
+
+/* Gate screen status line */
+.status-line {
+  margin-top: 0.5rem;
+  font-size: 0.88rem;
+  color: #a0a0b0;
+  text-align: center;
+}
+
+.status-line.ready {
+  color: #6fcf97;
+}
+
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulsing {
+  animation: pulse-opacity 1.2s ease-in-out infinite;
+}

@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { API_BASE_URL, WS_URL, ApiError, authenticate, createTab, deleteTab, getSession, listTabs, type AdminTab } from './api';
+import { API_BASE_URL, WS_URL, ApiError, authenticate, createTab, deleteTab, getSession, listTabs, pingBackend, type AdminTab } from './api';
 import type { ClientMessage, ServerMessage, Snapshot } from './types';
 
 const STORAGE_CLIENT_ID = 'dosh.clientId';
@@ -44,6 +44,9 @@ function App() {
 
   const [isWorking, setIsWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // 'starting' = session restore in flight (backend may be waking), 'ready' = backend responded, null = not shown
+  const [backendStatus, setBackendStatus] = useState<'starting' | 'ready' | null>(authToken ? 'starting' : null);
+  const sessionRestoreAbortRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showPersonModal, setShowPersonModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -79,23 +82,24 @@ function App() {
   }, [authToken]);
 
   useEffect(() => {
-    let cancelled = false;
+    const guard = { cancelled: false };
+    sessionRestoreAbortRef.current = guard;
 
     if (!authToken) {
       setAuthPhase('required');
       setSnapshot(null);
+      setBackendStatus(null);
       return () => {
-        cancelled = true;
+        guard.cancelled = true;
       };
     }
 
     setAuthPhase('checking');
+    setBackendStatus('starting');
 
     getSession(authToken, clientId)
       .then(async (session) => {
-        if (cancelled) {
-          return;
-        }
+        if (guard.cancelled) return;
 
         const admin = Boolean(session.isAdmin);
         setIsAdmin(admin);
@@ -103,6 +107,7 @@ function App() {
         if (!admin && session.tabCurrency) {
           setTabCurrency(session.tabCurrency);
         }
+        setBackendStatus(null);
         setAuthPhase('ready');
 
         if (admin) {
@@ -110,21 +115,62 @@ function App() {
         }
       })
       .catch((error) => {
-        if (cancelled) {
+        if (guard.cancelled) return;
+
+        const isNetworkError = error instanceof ApiError && (error.code === 'network' || error.code === 'timeout');
+
+        if (isNetworkError) {
+          // Backend still waking — poll until it responds, then retry session
+          const pollInterval = window.setInterval(async () => {
+            if (guard.cancelled) {
+              window.clearInterval(pollInterval);
+              return;
+            }
+
+            const alive = await pingBackend();
+            if (!alive || guard.cancelled) return;
+
+            window.clearInterval(pollInterval);
+            if (guard.cancelled) return;
+
+            setBackendStatus('ready');
+
+            // After 2s, attempt silent session retry (unless user submitted password already)
+            window.setTimeout(async () => {
+              if (guard.cancelled) return;
+              try {
+                const session = await getSession(authToken, clientId);
+                if (guard.cancelled) return;
+                const admin = Boolean(session.isAdmin);
+                setIsAdmin(admin);
+                setTabName(session.tabName || null);
+                if (!admin && session.tabCurrency) setTabCurrency(session.tabCurrency);
+                setBackendStatus(null);
+                setAuthPhase('ready');
+                if (admin) await refreshTabs();
+              } catch {
+                if (guard.cancelled) return;
+                // Session truly expired — just clear and show clean form
+                clearAuth();
+                setBackendStatus(null);
+              }
+            }, 2000);
+          }, 3000);
+
+          guard.cancelled = false; // keep alive
           return;
         }
 
+        // Auth error — session expired, clear silently
         clearAuth();
-        if (error instanceof ApiError && (error.code === 'network' || error.code === 'timeout')) {
-          setErrorMessage(error.message);
-          return;
-        }
-
-        setErrorMessage('Saved session expired. Enter the password again.');
+        setBackendStatus(null);
+        setAuthToken(null);
+        localStorage.removeItem(STORAGE_AUTH_TOKEN);
+        setAuthPhase('required');
       });
 
     return () => {
-      cancelled = true;
+      guard.cancelled = true;
     };
   }, [authToken, clientId, clearAuth, refreshTabs]);
 
@@ -261,10 +307,14 @@ function App() {
     setErrorMessage(null);
     setIsWorking(true);
 
+    // Cancel any in-flight session restore so it doesn't interfere
+    sessionRestoreAbortRef.current.cancelled = true;
+
     try {
       const result = await authenticate(passwordInput, clientId);
       setAuthToken(result.token);
       localStorage.setItem(STORAGE_AUTH_TOKEN, result.token);
+      setBackendStatus(null);
       setAuthPhase('ready');
       setIsAdmin(Boolean(result.session.isAdmin));
       setTabName(result.session.tabName || null);
@@ -529,7 +579,6 @@ function App() {
       <div className="app-shell">
         <section className="card gate-card">
           <h1>dosh</h1>
-          <p>Shared tab splitting</p>
 
           <form className="form-stack" onSubmit={onSubmitPassword}>
             <div>
@@ -546,12 +595,14 @@ function App() {
             </div>
 
             <button type="submit" disabled={isWorking || passwordInput.length === 0}>
-              {isWorking ? 'Checking…' : authPhase === 'checking' ? 'Use password instead' : 'Enter'}
+              {isWorking ? 'Checking…' : 'Enter'}
             </button>
           </form>
 
-          {authPhase === 'checking' ? (
-            <p className="hint">Checking saved session… If the backend is waking up, this should resolve within ~15s. You can also enter the password now.</p>
+          {backendStatus === 'starting' ? (
+            <p className="status-line pulsing">Starting backend…</p>
+          ) : backendStatus === 'ready' ? (
+            <p className="status-line ready">Ready</p>
           ) : null}
           {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
         </section>

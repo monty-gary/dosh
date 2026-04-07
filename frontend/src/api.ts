@@ -41,6 +41,16 @@ export async function authenticate(
   };
 }
 
+export async function pingBackend(): Promise<boolean> {
+  try {
+    const response = await safeFetch(`${API_BASE_URL}/api/session?token=ping&clientId=ping`);
+    // Any response (even 401/400) means the backend is up
+    return response.status < 500 || response.status >= 100;
+  } catch {
+    return false;
+  }
+}
+
 export async function getSession(token: string, clientId: string): Promise<SessionResponse['session']> {
   const params = new URLSearchParams({ token, clientId });
   const response = await safeFetch(`${API_BASE_URL}/api/session?${params.toString()}`);
