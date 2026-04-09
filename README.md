@@ -7,9 +7,8 @@ Realtime shared expense splitting app with weighted ratios.
 - `frontend/`: Vite + React + TypeScript client
 
 ## Product flow
-1. Password gate (`money` by default)
-2. Enter your display name
-3. Add expenses and see shared balances + settle-up plan update live for everyone
+1. Password gate
+2. Add expenses and see shared balances + settle-up plan update live for everyone
 
 ## Data model
 - participants (named clients)
