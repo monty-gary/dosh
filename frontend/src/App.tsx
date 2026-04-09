@@ -56,7 +56,6 @@ function App() {
   const sendWsMessage = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setErrorMessage('Realtime connection is not ready yet.');
       return;
     }
 
@@ -714,7 +713,7 @@ function App() {
 
         {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
         {connectionState !== 'online' ? (
-          <p className="hint">Connecting… If Render is sleeping, wake-up can take up to ~60s.</p>
+          <span className="status-line pulsing">Waiting for backend…</span>
         ) : null}
 
         <div className="main-grid">
